@@ -2007,10 +2007,11 @@ function StarburstIcon() {
   );
 }
 
-const MOBILE_TOP_RACK_MASK_HEIGHT = 18;
-const MOBILE_SIDE_RACK_MASK_WIDTH = 22;
-const MOBILE_TOP_RACK_STEP = 33;
-const MOBILE_SIDE_RACK_STEP = 33;
+const OPPONENT_TILE_SCALE = 0.9;
+const MOBILE_TOP_RACK_MASK_HEIGHT = 11;
+const MOBILE_SIDE_RACK_MASK_WIDTH = 10;
+const MOBILE_TOP_RACK_STEP = 30;
+const MOBILE_SIDE_RACK_STEP = 21;
 const MOBILE_DRAW_TILE_GAP = 8;
 
 function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void, tone: 'default' | 'alt' = 'default') {
@@ -2029,6 +2030,7 @@ function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string
             return (
               <div
                 key={tile.id}
+                style={{ transform: `scale(${OPPONENT_TILE_SCALE})`, transformOrigin: 'center center' }}
                 className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
                 onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
               >
@@ -2054,7 +2056,7 @@ function renderExposureColumns(groups: TileType[][], tileRotation: string, click
             return (
               <div
                 key={tile.id}
-                style={{ transform: tileRotation }}
+                style={{ transform: `${tileRotation} scale(${OPPONENT_TILE_SCALE})`, transformOrigin: 'center center' }}
                 className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
                 onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
               >
@@ -2079,7 +2081,16 @@ function MobileTopConcealedRack({ tileCount, showDrawGap = false }: { tileCount:
         {Array.from({ length: tileCount }).map((_, i) => {
           const left = i * MOBILE_TOP_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
           return (
-            <div key={i} className="absolute" style={{ left, top: -(44 - MOBILE_TOP_RACK_MASK_HEIGHT) }}>
+            <div
+              key={i}
+              className="absolute"
+              style={{
+                left,
+                top: -(44 - MOBILE_TOP_RACK_MASK_HEIGHT),
+                transform: `scale(${OPPONENT_TILE_SCALE})`,
+                transformOrigin: 'top center',
+              }}
+            >
               <TileBack size="sm" />
             </div>
           );
@@ -2100,16 +2111,15 @@ function MobileSideConcealedRack({
 }) {
   if (tileCount <= 0) return null;
 
-  const tileAngle = side === 'left' ? 90 : -90;
-  const totalHeight = 44 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
-  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -2;
+  const totalHeight = 32 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -(44 * (1 - OPPONENT_TILE_SCALE));
 
   return (
     <div
       className="shrink-0 overflow-y-auto"
       style={{ width: MOBILE_SIDE_RACK_MASK_WIDTH, minWidth: MOBILE_SIDE_RACK_MASK_WIDTH }}
     >
-      <div className="relative" style={{ width: 32, height: totalHeight }}>
+      <div className="relative" style={{ width: 44, height: totalHeight }}>
         {Array.from({ length: tileCount }).map((_, i) => {
           const top = i * MOBILE_SIDE_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
           return (
@@ -2119,11 +2129,11 @@ function MobileSideConcealedRack({
               style={{
                 top,
                 left: tileLeft,
-                transform: `rotate(${tileAngle}deg)`,
+                transform: `scale(${OPPONENT_TILE_SCALE})`,
                 transformOrigin: side === 'left' ? 'right center' : 'left center',
               }}
             >
-              <TileBack size="sm" />
+              <TileBack size="sm" horizontal />
             </div>
           );
         })}
@@ -2150,6 +2160,8 @@ function OpponentRow({
   return (
     <div className="flex flex-col items-center shrink-0 px-2">
       <div className="sm:hidden w-full flex flex-col items-center gap-1 pt-1">
+        <MobileTopConcealedRack tileCount={player.hand.length} showDrawGap={showDrawGap} />
+        {exposureGroups && <div className="mt-0.5">{exposureGroups}</div>}
         <div className="flex items-center gap-1.5 flex-wrap justify-center">
           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
             background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
@@ -2172,8 +2184,6 @@ function OpponentRow({
             </span>
           )}
         </div>
-        <MobileTopConcealedRack tileCount={player.hand.length} showDrawGap={showDrawGap} />
-        {exposureGroups && <div className="mt-0.5">{exposureGroups}</div>}
       </div>
 
       <div className="hidden sm:flex flex-col items-center py-1.5">
@@ -2193,7 +2203,9 @@ function OpponentRow({
         </div>
         <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
           {player.hand.map((_: any, i: number) => (
-            <TileBack key={`${player.id}_top_${i}`} size="sm" />
+            <div key={`${player.id}_top_${i}`} style={{ transform: `scale(${OPPONENT_TILE_SCALE})`, transformOrigin: 'top center' }}>
+              <TileBack size="sm" />
+            </div>
           ))}
         </div>
         {exposureGroups && <div className="mt-1">{exposureGroups}</div>}
