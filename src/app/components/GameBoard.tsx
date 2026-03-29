@@ -8,9 +8,6 @@ import { GameOverModal } from './GameOverModal';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
-import wordmarkPaths from '../../imports/svg-i64mkcl8d2';
-
-
 const DISCARD_CALL_WINDOW_SECONDS = 20;
 const OPPONENT_DECISION_SECONDS = 10;
 const HUMAN_DRAW_DELAY_MS = 500;
@@ -708,7 +705,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   return (
     <DndProvider backend={HTML5Backend}>
-    <div className="h-screen flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif" }}>
+    <div className="flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif", height: '100dvh', minHeight: '100dvh' }}>
       {/* Top Bar */}
       <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
         <div className="flex items-center gap-2">
@@ -730,20 +727,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         </div>
 
         <div className="flex items-center gap-1.5">
-          {/* Otto Mahjong Wordmark */}
-          <svg className="block" style={{ height: 14, width: 'auto' }} fill="none" preserveAspectRatio="xMidYMid meet" viewBox="0 0 149.76 12.48">
-            <path d={wordmarkPaths.p3f729400} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p2b6d020} fill="#FFFDF7" />
-            <path d={wordmarkPaths.pc77f6f0} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p1a2a1800} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p32a54d00} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p1db28300} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p2027a340} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p29014460} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p35b5ad80} fill="#FFFDF7" />
-            <path d={wordmarkPaths.p2fe4d780} fill="#FFFDF7" />
-            <path d={wordmarkPaths.pc75f000} fill="#FFFDF7" />
-          </svg>
+          <span style={{
+            color: '#FFFDF7',
+            fontFamily: "'Futura', 'Trebuchet MS', sans-serif",
+            fontSize: '1.1rem',
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            lineHeight: 1,
+          }}>
+            Otto Online
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -892,7 +886,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   <div className="rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
                     background: blankTradeMode ? 'rgba(181,112,79,0.2)' : 'rgba(255,253,247,0.1)',
                     border: blankTradeMode ? '2px solid rgba(181,112,79,0.6)' : '1px solid rgba(255,253,247,0.12)',
-                    maxHeight: config.playerCount >= 3 ? '50vh' : '60vh',
+                    maxHeight: config.playerCount >= 3 ? 'min(34dvh, 18rem)' : 'min(42dvh, 20rem)',
                     transition: 'all 0.2s ease',
                   }}>
                     <div className="flex flex-wrap gap-1 justify-center min-h-[50px]">
@@ -1080,7 +1074,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         </div>
 
         {/* Player's Area */}
-        <div ref={playerBarRef} className="shrink-0" style={{ background: '#FFFDF7', borderTop: '3px solid #B5704F' }}>
+        <div ref={playerBarRef} className="sticky bottom-0 z-20 shrink-0" style={{ background: '#FFFDF7', borderTop: '3px solid #B5704F', paddingBottom: 'env(safe-area-inset-bottom)' }}>
           {/* Controls — py reduced on mobile to keep full player area on-screen */}
           <div className="flex items-center justify-between px-2 sm:px-3 py-0.5 sm:py-1" style={{
             borderBottom: '1px solid rgba(27,42,74,0.06)',
@@ -2015,8 +2009,8 @@ function StarburstIcon() {
 
 const MOBILE_TOP_RACK_MASK_HEIGHT = 18;
 const MOBILE_SIDE_RACK_MASK_WIDTH = 18;
-const MOBILE_TOP_RACK_STEP = 13;
-const MOBILE_SIDE_RACK_STEP = 10;
+const MOBILE_TOP_RACK_STEP = 32;
+const MOBILE_SIDE_RACK_STEP = 44;
 const MOBILE_DRAW_TILE_GAP = 8;
 
 function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void, tone: 'default' | 'alt' = 'default') {
@@ -2111,10 +2105,10 @@ function MobileSideConcealedRack({
 
   return (
     <div
-      className="relative h-full overflow-hidden shrink-0"
+      className="shrink-0 overflow-y-auto"
       style={{ width: MOBILE_SIDE_RACK_MASK_WIDTH, minWidth: MOBILE_SIDE_RACK_MASK_WIDTH }}
     >
-      <div className="absolute left-0 top-1/2 -translate-y-1/2" style={{ width: 32, height: totalHeight }}>
+      <div className="relative" style={{ width: 32, height: totalHeight }}>
         {Array.from({ length: tileCount }).map((_, i) => {
           const top = i * MOBILE_SIDE_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
           return (
