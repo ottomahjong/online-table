@@ -737,8 +737,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               <GhostWall />
             )}
 
-            {/* Center: Charleston / Discard Pool + Actions */}
-            <div className="flex-1 flex flex-col items-center justify-center p-2 min-h-0 gap-2">
+            {/* Center: Charleston / Discard Pool + Actions
+                On mobile reduce padding/gap to keep the discard pool as large
+                as possible without the player area being pushed off screen. */}
+            <div className="flex-1 flex flex-col items-center justify-center p-1 sm:p-2 min-h-0 gap-1 sm:gap-2">
               {game.phase === 'charleston' ? (
                 <CharlestonUI
                   subPhase={charlestonSubPhase}
@@ -779,11 +781,14 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                     </div>
                   )}
 
-                  {/* Discard Area */}
-                  <div className="rounded-lg p-3 w-full max-w-lg overflow-auto" style={{
+                  {/* Discard Area
+                      Mobile maxHeight is raised because opponent racks are now
+                      slim peek strips (~25 px) rather than full tile walls,
+                      reclaiming significant vertical space for the center. */}
+                  <div className="rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
                     background: blankTradeMode ? 'rgba(181,112,79,0.2)' : 'rgba(255,253,247,0.1)',
                     border: blankTradeMode ? '2px solid rgba(181,112,79,0.6)' : '1px solid rgba(255,253,247,0.12)',
-                    maxHeight: config.playerCount >= 3 ? '40vh' : '50vh',
+                    maxHeight: config.playerCount >= 3 ? '50vh' : '60vh',
                     transition: 'all 0.2s ease',
                   }}>
                     <div className="flex flex-wrap gap-1 justify-center min-h-[50px]">
@@ -926,7 +931,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
           {/* Human Player Exposures (in game area, above player bar) */}
           {(humanPlayer.exposures.length > 0 || (siamese && humanPlayer.exposures2.length > 0)) && (
-            <div className="flex flex-col items-center gap-1 px-4 py-1.5 shrink-0">
+            <div className="flex flex-col items-center gap-1 px-2 sm:px-4 py-1 sm:py-1.5 shrink-0">
               {/* Rack 1 exposures */}
               {humanPlayer.exposures.length > 0 && (
                 <div className="flex items-center gap-2">
@@ -971,8 +976,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
         {/* Player's Area */}
         <div ref={playerBarRef} className="shrink-0" style={{ background: '#FFFDF7', borderTop: '3px solid #B5704F' }}>
-          {/* Controls */}
-          <div className="flex items-center justify-between px-3 py-1" style={{
+          {/* Controls — py reduced on mobile to keep full player area on-screen */}
+          <div className="flex items-center justify-between px-2 sm:px-3 py-0.5 sm:py-1" style={{
             borderBottom: '1px solid rgba(27,42,74,0.06)',
           }}>
             <div className="flex items-center gap-1.5">
@@ -1881,57 +1886,99 @@ function StarburstIcon() {
 }
 
 function OpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
+  // Exposure groups shared between mobile and desktop renders
+  const exposureGroups = player.exposures.length > 0 ? (
+    <div className="flex gap-1 flex-wrap justify-center">
+      {player.exposures.map((group: TileType[], gi: number) => (
+        <div key={gi} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
+          {group.map((tile: TileType) => {
+            const isClickable = clickableJokerIds?.has(tile.id);
+            return (
+              <div
+                key={tile.id}
+                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
+              >
+                <TileComponent tile={tile} size="sm" />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  ) : null;
+
   return (
-    <div className="flex flex-col items-center py-1.5 px-2 shrink-0">
-      <div className="flex items-center gap-2 mb-1">
-        <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
-          background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
-        }} />
-        <span className="text-[0.6rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.65)' }}>
-          {player.name}
-        </span>
-        <span className="text-[0.5rem] px-1 py-0.5 rounded" style={{
-          background: 'rgba(255,253,247,0.06)',
-          color: 'rgba(255,253,247,0.35)',
-        }}>
-          {player.seatWind.toUpperCase()} &middot; {player.hand.length}
-        </span>
+    <div className="flex flex-col items-center shrink-0 px-2">
+
+      {/* ── Mobile (<sm): status strip + peeking rack edge + exposures ─────────
+          The hidden rack shows only its top ~14 px — like tile backs sitting on
+          a rack just above the table edge, with exposures fully visible below. */}
+      <div className="sm:hidden w-full flex flex-col items-center">
+        <div className="flex items-center gap-1.5 py-0.5">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+            background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+          }} />
+          <span className="text-[0.5rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.55)' }}>
+            {player.name}
+          </span>
+          <span className="text-[0.45rem] px-1 rounded" style={{
+            background: 'rgba(255,253,247,0.06)',
+            color: 'rgba(255,253,247,0.3)',
+          }}>
+            {player.seatWind.toUpperCase()} · {player.hand.length}
+          </span>
+        </div>
+        {/* Peek strip: overflow-hidden container shows only the topmost slice of
+            tile backs — the visual cue that a rack lives just above the table. */}
+        {player.hand.length > 0 && (
+          <div className="flex justify-center gap-0.5 overflow-hidden w-full" style={{ height: 14 }}>
+            {Array.from({ length: Math.min(5, player.hand.length) }).map((_, i) => (
+              <TileBack key={`${player.id}_mob_${i}`} size="sm" />
+            ))}
+          </div>
+        )}
+        {/* Exposures are gameplay-critical: always shown in full below the peek */}
+        {exposureGroups && <div className="mt-1">{exposureGroups}</div>}
       </div>
-      {/* Face-down wall */}
-      <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
-        {player.hand.map((_: any, i: number) => (
-          <TileBack key={`${player.id}_top_${i}`} size="sm" />
-        ))}
-      </div>
-      {/* Exposures below the wall, toward center (right-side up, not flipped) */}
-      {player.exposures.length > 0 && (
-        <div className="flex gap-1 mt-1 flex-wrap justify-center">
-          {player.exposures.map((group: TileType[], gi: number) => (
-            <div key={gi} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
-              {group.map((tile: TileType) => {
-                const isClickable = clickableJokerIds?.has(tile.id);
-                return (
-                  <div
-                    key={tile.id}
-                    className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                    onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-                  >
-                    <TileComponent tile={tile} size="sm" />
-                  </div>
-                );
-              })}
-            </div>
+
+      {/* ── Desktop (sm+): full face-down wall ───────────────────────────────── */}
+      <div className="hidden sm:flex flex-col items-center py-1.5">
+        <div className="flex items-center gap-2 mb-1">
+          <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+            background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+          }} />
+          <span className="text-[0.6rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.65)' }}>
+            {player.name}
+          </span>
+          <span className="text-[0.5rem] px-1 py-0.5 rounded" style={{
+            background: 'rgba(255,253,247,0.06)',
+            color: 'rgba(255,253,247,0.35)',
+          }}>
+            {player.seatWind.toUpperCase()} &middot; {player.hand.length}
+          </span>
+        </div>
+        <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
+          {player.hand.map((_: any, i: number) => (
+            <TileBack key={`${player.id}_top_${i}`} size="sm" />
           ))}
         </div>
-      )}
+        {exposureGroups && <div className="mt-1">{exposureGroups}</div>}
+      </div>
+
     </div>
   );
 }
 
 function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; side: 'left' | 'right'; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
   const tileRotation = side === 'left' ? 'rotate(90deg)' : 'rotate(-90deg)';
+  // Visible pixel width of each tile in the mobile peek strip.
+  // sm tile backs are 32 px wide; 13 px shows ~40 % of the edge — enough to
+  // convey "rack here" without consuming horizontal board space.
+  const PEEK_W = 13;
 
-  const wallColumn = (
+  // ── Desktop: horizontal tile backs stacked in a column ──────────────────
+  const wallColumnFull = (
     <div className="flex flex-col gap-0.5 items-center shrink-0">
       {player.hand.map((_: any, i: number) => (
         <TileBack key={`${player.id}_side_${i}`} size="sm" horizontal />
@@ -1939,6 +1986,26 @@ function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClic
     </div>
   );
 
+  // ── Mobile: portrait tile backs clipped to show only their inner edge ───
+  // For the LEFT column the INNER (right) edge of each tile faces the center,
+  // so we right-align tiles in the overflow-hidden container to expose that edge.
+  // For the RIGHT column the INNER (left) edge faces center — left-align instead.
+  const wallColumnPeek = (
+    <div
+      className="flex flex-col gap-0.5 shrink-0 py-1"
+      style={{
+        width: PEEK_W,
+        overflow: 'hidden',
+        alignItems: side === 'left' ? 'flex-end' : 'flex-start',
+      }}
+    >
+      {Array.from({ length: Math.min(6, player.hand.length) }).map((_, i) => (
+        <TileBack key={`${player.id}_mob_${i}`} size="sm" />
+      ))}
+    </div>
+  );
+
+  // Rotated exposures — same for both breakpoints, always fully visible
   const exposuresColumn = player.exposures.length > 0 ? (
     <div className="flex flex-col gap-1 items-center shrink-0 py-1">
       {player.exposures.map((group: TileType[], gi: number) => (
@@ -1962,37 +2029,47 @@ function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClic
   ) : null;
 
   return (
-    <div className="flex items-start justify-center py-2 px-1 shrink-0 overflow-y-auto">
-      {/* Info label */}
-      <div className="flex flex-col items-center w-8 shrink-0 pt-0.5">
-        <div className={`w-2 h-2 rounded-full mb-1 shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
-          background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
-        }} />
-        <span className="text-[0.45rem] uppercase tracking-wider mb-0.5 text-center shrink-0" style={{
-          color: 'rgba(255,253,247,0.55)',
-          writingMode: 'vertical-lr',
-        }}>
-          {player.name.split(' ')[0]}
-        </span>
-        <span className="text-[0.4rem] shrink-0 px-1 py-0.5 rounded" style={{
-          background: 'rgba(255,253,247,0.06)',
-          color: 'rgba(255,253,247,0.3)',
-        }}>
-          {player.hand.length}
-        </span>
+    // overflow-y-auto lets the column scroll in landscape when tiles overflow
+    <div className="shrink-0 overflow-y-auto">
+
+      {/* ── Desktop (sm+): info label + full horizontal-tile wall ────────────── */}
+      <div className="hidden sm:flex items-start justify-center py-2 px-1">
+        <div className="flex flex-col items-center w-8 shrink-0 pt-0.5">
+          <div className={`w-2 h-2 rounded-full mb-1 shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+            background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+          }} />
+          <span className="text-[0.45rem] uppercase tracking-wider mb-0.5 text-center shrink-0" style={{
+            color: 'rgba(255,253,247,0.55)',
+            writingMode: 'vertical-lr',
+          }}>
+            {player.name.split(' ')[0]}
+          </span>
+          <span className="text-[0.4rem] shrink-0 px-1 py-0.5 rounded" style={{
+            background: 'rgba(255,253,247,0.06)',
+            color: 'rgba(255,253,247,0.3)',
+          }}>
+            {player.hand.length}
+          </span>
+        </div>
+        {side === 'left' ? (
+          <>{wallColumnFull}{exposuresColumn}</>
+        ) : (
+          <>{exposuresColumn}{wallColumnFull}</>
+        )}
       </div>
-      {/* Wall on edge side, exposures toward center */}
-      {side === 'left' ? (
-        <>
-          {wallColumn}
-          {exposuresColumn}
-        </>
-      ) : (
-        <>
-          {exposuresColumn}
-          {wallColumn}
-        </>
-      )}
+
+      {/* ── Mobile (<sm): slim peek edge + rotated exposures ────────────────────
+          Wall is replaced by a PEEK_W-px strip showing the inner tile edge.
+          Exposures are kept at full size — they carry real gameplay information.
+          The whole column can scroll vertically in landscape if exposures are tall. */}
+      <div className="sm:hidden flex items-start py-1">
+        {side === 'left' ? (
+          <>{wallColumnPeek}{exposuresColumn}</>
+        ) : (
+          <>{exposuresColumn}{wallColumnPeek}</>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -2000,78 +2077,113 @@ function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClic
 // ─── Siamese Opponent Row (shows two racks of face-down tiles) ────────
 
 function SiameseOpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
+  const totalTiles = player.hand.length + player.hand2.length;
+
+  // Exposure rows shared between mobile and desktop renders
+  const exposureRows = (player.exposures.length > 0 || player.exposures2.length > 0) ? (
+    <div className="flex gap-2 flex-wrap justify-center">
+      {player.exposures.map((group: TileType[], gi: number) => (
+        <div key={`e1-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
+          {group.map((tile: TileType) => {
+            const isClickable = clickableJokerIds?.has(tile.id);
+            return (
+              <div
+                key={tile.id}
+                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
+              >
+                <TileComponent tile={tile} size="sm" />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {player.exposures2.map((group: TileType[], gi: number) => (
+        <div key={`e2-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(181,112,79,0.06)' }}>
+          {group.map((tile: TileType) => {
+            const isClickable = clickableJokerIds?.has(tile.id);
+            return (
+              <div
+                key={tile.id}
+                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
+              >
+                <TileComponent tile={tile} size="sm" />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  ) : null;
+
   return (
-    <div className="flex flex-col items-center py-1.5 px-2 shrink-0">
-      <div className="flex items-center gap-2 mb-1">
-        <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
-          background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
-        }} />
-        <span className="text-[0.6rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.65)' }}>
-          {player.name}
-        </span>
-        <span className="text-[0.5rem] px-1 py-0.5 rounded" style={{
-          background: 'rgba(255,253,247,0.06)',
-          color: 'rgba(255,253,247,0.35)',
-        }}>
-          {player.seatWind.toUpperCase()} &middot; {player.hand.length + player.hand2.length}
-        </span>
-      </div>
-      {/* Two racks of face-down tiles */}
-      <div className="flex flex-col items-center gap-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[0.4rem] uppercase tracking-wider shrink-0 w-4 text-right" style={{ color: 'rgba(255,253,247,0.25)' }}>R1</span>
-          <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
-            {player.hand.map((_: any, i: number) => (
-              <TileBack key={`${player.id}_r1_${i}`} size="sm" />
+    <div className="flex flex-col items-center shrink-0 px-2">
+
+      {/* ── Mobile (<sm): combined peek strip for both racks ────────────────────
+          One peek strip represents both racks; exposures shown in full below. */}
+      <div className="sm:hidden w-full flex flex-col items-center">
+        <div className="flex items-center gap-1.5 py-0.5">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+            background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+          }} />
+          <span className="text-[0.5rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.55)' }}>
+            {player.name}
+          </span>
+          <span className="text-[0.45rem] px-1 rounded" style={{
+            background: 'rgba(255,253,247,0.06)',
+            color: 'rgba(255,253,247,0.3)',
+          }}>
+            {player.seatWind.toUpperCase()} · {totalTiles}
+          </span>
+        </div>
+        {totalTiles > 0 && (
+          <div className="flex justify-center gap-0.5 overflow-hidden w-full" style={{ height: 14 }}>
+            {Array.from({ length: Math.min(5, totalTiles) }).map((_, i) => (
+              <TileBack key={`${player.id}_siam_mob_${i}`} size="sm" />
             ))}
           </div>
+        )}
+        {exposureRows && <div className="mt-1">{exposureRows}</div>}
+      </div>
+
+      {/* ── Desktop (sm+): two labeled racks + exposures ─────────────────────── */}
+      <div className="hidden sm:flex flex-col items-center py-1.5">
+        <div className="flex items-center gap-2 mb-1">
+          <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+            background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+          }} />
+          <span className="text-[0.6rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.65)' }}>
+            {player.name}
+          </span>
+          <span className="text-[0.5rem] px-1 py-0.5 rounded" style={{
+            background: 'rgba(255,253,247,0.06)',
+            color: 'rgba(255,253,247,0.35)',
+          }}>
+            {player.seatWind.toUpperCase()} &middot; {totalTiles}
+          </span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-[0.4rem] uppercase tracking-wider shrink-0 w-4 text-right" style={{ color: 'rgba(255,253,247,0.25)' }}>R2</span>
-          <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
-            {player.hand2.map((_: any, i: number) => (
-              <TileBack key={`${player.id}_r2_${i}`} size="sm" />
-            ))}
+        <div className="flex flex-col items-center gap-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[0.4rem] uppercase tracking-wider shrink-0 w-4 text-right" style={{ color: 'rgba(255,253,247,0.25)' }}>R1</span>
+            <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
+              {player.hand.map((_: any, i: number) => (
+                <TileBack key={`${player.id}_r1_${i}`} size="sm" />
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[0.4rem] uppercase tracking-wider shrink-0 w-4 text-right" style={{ color: 'rgba(255,253,247,0.25)' }}>R2</span>
+            <div className="flex gap-0.5 flex-wrap justify-center max-w-md">
+              {player.hand2.map((_: any, i: number) => (
+                <TileBack key={`${player.id}_r2_${i}`} size="sm" />
+              ))}
+            </div>
           </div>
         </div>
+        {exposureRows && <div className="mt-1">{exposureRows}</div>}
       </div>
-      {/* Exposures for both racks */}
-      {(player.exposures.length > 0 || player.exposures2.length > 0) && (
-        <div className="flex gap-2 mt-1 flex-wrap justify-center">
-          {player.exposures.map((group: TileType[], gi: number) => (
-            <div key={`e1-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
-              {group.map((tile: TileType) => {
-                const isClickable = clickableJokerIds?.has(tile.id);
-                return (
-                  <div
-                    key={tile.id}
-                    className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                    onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-                  >
-                    <TileComponent tile={tile} size="sm" />
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-          {player.exposures2.map((group: TileType[], gi: number) => (
-            <div key={`e2-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(181,112,79,0.06)' }}>
-              {group.map((tile: TileType) => {
-                const isClickable = clickableJokerIds?.has(tile.id);
-                return (
-                  <div
-                    key={tile.id}
-                    className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                    onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-                  >
-                    <TileComponent tile={tile} size="sm" />
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
+
     </div>
   );
 }
@@ -2080,24 +2192,29 @@ function SiameseOpponentRow({ player, isActive, clickableJokerIds, onJokerClick 
 
 function GhostWall() {
   return (
-    <div className="flex items-center justify-center py-2 px-2 shrink-0" style={{ width: 48 }}>
-      <div className="flex flex-col items-center gap-1.5">
-        <div className="w-2 h-2 rounded-full" style={{ background: 'rgba(255,253,247,0.06)' }} />
-        <span className="text-[0.4rem] uppercase tracking-wider text-center" style={{
-          color: 'rgba(255,253,247,0.15)',
-          writingMode: 'vertical-lr',
-          letterSpacing: '0.15em',
-        }}>
-          Ghost Wall
-        </span>
-        <div className="flex flex-col gap-0.5 items-center">
-          {[0, 1, 2].map(i => (
-            <div key={i} className="rounded-sm" style={{
-              width: 16, height: 20,
-              background: 'rgba(255,253,247,0.03)',
-              border: '1px dashed rgba(255,253,247,0.06)',
-            }} />
-          ))}
+    <div className="shrink-0">
+      {/* Mobile: just a hairline placeholder so the flex row still has a left column */}
+      <div className="sm:hidden h-full" style={{ width: 6, background: 'rgba(255,253,247,0.02)' }} />
+      {/* Desktop: labelled ghost column */}
+      <div className="hidden sm:flex items-center justify-center py-2 px-2 h-full" style={{ width: 48 }}>
+        <div className="flex flex-col items-center gap-1.5">
+          <div className="w-2 h-2 rounded-full" style={{ background: 'rgba(255,253,247,0.06)' }} />
+          <span className="text-[0.4rem] uppercase tracking-wider text-center" style={{
+            color: 'rgba(255,253,247,0.15)',
+            writingMode: 'vertical-lr',
+            letterSpacing: '0.15em',
+          }}>
+            Ghost Wall
+          </span>
+          <div className="flex flex-col gap-0.5 items-center">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="rounded-sm" style={{
+                width: 16, height: 20,
+                background: 'rgba(255,253,247,0.03)',
+                border: '1px dashed rgba(255,253,247,0.06)',
+              }} />
+            ))}
+          </div>
         </div>
       </div>
     </div>
