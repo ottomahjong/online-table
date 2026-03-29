@@ -11,8 +11,24 @@ import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, ArrowD
 import wordmarkPaths from '../../imports/svg-i64mkcl8d2';
 
 
-const CALL_WINDOW_SECONDS_DEFAULT = 10;
-const CALL_WINDOW_SECONDS_TIPS = 20;
+const DISCARD_CALL_WINDOW_SECONDS = 20;
+const OPPONENT_DECISION_SECONDS = 10;
+const HUMAN_DRAW_DELAY_MS = 500;
+const CHARLESTON_PASS_DELAY_MS = 1200;
+const CHARLESTON_COMPLETE_DELAY_MS = 600;
+
+type PendingActionKind =
+  | 'call-window'
+  | 'human-draw'
+  | 'ai-turn'
+  | 'charleston-next-pass'
+  | 'charleston-start-playing';
+
+interface PendingAction {
+  kind: PendingActionKind;
+  remainingMs: number;
+  totalMs: number;
+}
 
 const CHARLESTON_STEPS: { direction: CharlestonDirection; label: string; group: string }[] = [
   { direction: 'right', label: 'Pass Right', group: 'First Charleston' },
@@ -35,10 +51,13 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [callCountdown, setCallCountdown] = useState<number | null>(null);
   const [planHands, setPlanHands] = useState<(PlanHand | null)[]>([null, null, null]);
   const [playerBarHeight, setPlayerBarHeight] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const callDeadlineRef = useRef<number | null>(null);
   const playerBarRef = useRef<HTMLDivElement | null>(null);
+  const actionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const actionDeadlineRef = useRef<number | null>(null);
+  const pendingActionRef = useRef<PendingAction | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
 
   // Charleston state
   const [charlestonSubPhase, setCharlestonSubPhase] = useState<'pre' | 'selecting' | 'passed' | 'optOut' | 'courtesy' | 'done'>('pre');
@@ -54,7 +73,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const humanPlayer = game.players[0];
   const tilesRemaining = game.wall.length;
   const tipsEnabled = config.tipsEnabled;
-  const callWindowSeconds = tipsEnabled ? CALL_WINDOW_SECONDS_TIPS : CALL_WINDOW_SECONDS_DEFAULT;
+  const callWindowSeconds = DISCARD_CALL_WINDOW_SECONDS;
   const siamese = config.playerCount === 2;
   const activeRack = game.activeRack ?? 1;
 
@@ -74,118 +93,76 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     return () => observer.disconnect();
   }, []);
 
-  // Clear all timers helper
-  const clearAllTimers = useCallback(() => {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
-    callDeadlineRef.current = null;
-    setCallCountdown(null);
+  const clearSchedulerRefs = useCallback(() => {
+    if (actionTimeoutRef.current) {
+      clearTimeout(actionTimeoutRef.current);
+      actionTimeoutRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    actionDeadlineRef.current = null;
   }, []);
 
-  // Start the calling countdown
-  const startCallCountdown = useCallback(() => {
-    clearAllTimers();
-    const deadline = Date.now() + callWindowSeconds * 1000;
-    callDeadlineRef.current = deadline;
-    setCallCountdown(callWindowSeconds);
+  const clearPendingAction = useCallback((preserveCountdown = false) => {
+    clearSchedulerRefs();
+    pendingActionRef.current = null;
+    setPendingAction(null);
+    if (!preserveCountdown) {
+      setCallCountdown(null);
+    }
+  }, [clearSchedulerRefs]);
 
-    countdownRef.current = setInterval(() => {
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      setCallCountdown(remaining);
-      if (remaining <= 0) {
-        if (countdownRef.current) clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
-    }, 250);
-  }, [clearAllTimers, callWindowSeconds]);
+  const schedulePendingAction = useCallback((kind: PendingActionKind, delayMs: number) => {
+    const nextAction: PendingAction = {
+      kind,
+      remainingMs: delayMs,
+      totalMs: delayMs,
+    };
+    pendingActionRef.current = nextAction;
+    setPendingAction(nextAction);
+    if (kind === 'call-window') {
+      setCallCountdown(Math.max(0, Math.ceil(delayMs / 1000)));
+    } else {
+      setCallCountdown(null);
+    }
+  }, []);
 
-  // Auto-ignore when countdown expires
-  useEffect(() => {
-    if (callCountdown !== null && callCountdown <= 0 && game.turnPhase === 'calling' && game.phase === 'playing') {
-      // Time's up — process AI calls then pass
-      clearAllTimers();
-      setGame(prev => {
-        if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
-        if (prev.lastDiscardedBy === null) return passTurn(prev);
-        // Next-in-turn priority for AI calling (skill-aware)
-        for (let offset = 1; offset < prev.config.playerCount; offset++) {
-          const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-          if (prev.players[i].isHuman) continue;
-          const aiCallSize = aiShouldCall(prev, i);
-          if (aiCallSize !== null) {
-            return callTile(prev, i, aiCallSize);
-          }
+  const resolveCallingPhase = useCallback(() => {
+    setGame(prev => {
+      if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
+      if (prev.lastDiscardedBy === null) return passTurn(prev);
+      for (let offset = 1; offset < prev.config.playerCount; offset++) {
+        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
+        if (prev.players[i].isHuman) continue;
+        const aiCallSize = aiShouldCall(prev, i);
+        if (aiCallSize !== null) {
+          return callTile(prev, i, aiCallSize);
         }
-        return passTurn(prev);
-      });
-    }
-  }, [callCountdown, game.turnPhase, game.phase, clearAllTimers]);
-
-  // Game loop
-  useEffect(() => {
-    if (game.phase !== 'playing') {
-      clearAllTimers();
-      return;
-    }
-
-    const currentPlayer = game.players[game.currentPlayerIndex];
-
-    // === CALLING PHASE ===
-    if (game.turnPhase === 'calling') {
-      // If it's a discard NOT by human, show calling UI with countdown
-      if (game.lastDiscardedBy !== 0 && game.lastDiscarded !== null) {
-        // Start countdown if not already running
-        if (callDeadlineRef.current === null) {
-          startCallCountdown();
-        }
-        return; // Wait for Call/Ignore click or countdown expiry
       }
+      return passTurn(prev);
+    });
+  }, []);
 
-      // Human discarded — give AI a brief window to call (next-in-turn priority)
-      timerRef.current = setTimeout(() => {
-        setGame(prev => {
-          if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
-          if (prev.lastDiscardedBy === null) return passTurn(prev);
-          // Check in next-in-turn order for proper priority (skill-aware)
-          for (let offset = 1; offset < prev.config.playerCount; offset++) {
-            const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-            if (prev.players[i].isHuman) continue;
-            const aiCallSize = aiShouldCall(prev, i);
-            if (aiCallSize !== null) {
-              return callTile(prev, i, aiCallSize);
-            }
-          }
-          return passTurn(prev);
-        });
-      }, 1200);
-      return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-    }
+  const executePendingAction = useCallback((action: PendingAction) => {
+    clearPendingAction();
 
-    // === HUMAN DRAWING ===
-    if (currentPlayer.isHuman && game.turnPhase === 'drawing') {
-      timerRef.current = setTimeout(() => {
+    switch (action.kind) {
+      case 'call-window':
+        resolveCallingPhase();
+        return;
+      case 'human-draw':
         setGame(prev => {
           if (prev.phase !== 'playing' || prev.turnPhase !== 'drawing') return prev;
-          // In Siamese mode, draw to the active rack (human can switch before draw)
-          // Default: draw to whichever rack has fewer tiles
           if (isSiameseMode(prev)) {
             const drawRack = siamesePickDrawRack(prev.players[0]);
             return drawTile({ ...prev, activeRack: drawRack });
           }
           return drawTile(prev);
         });
-      }, 500);
-      return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-    }
-
-    // === HUMAN DISCARDING - wait for input ===
-    if (currentPlayer.isHuman && game.turnPhase === 'discarding') {
-      return;
-    }
-
-    // === AI TURN ===
-    if (!currentPlayer.isHuman) {
-      timerRef.current = setTimeout(() => {
+        return;
+      case 'ai-turn':
         setGame(prev => {
           if (prev.phase !== 'playing') return prev;
           const cp = prev.players[prev.currentPlayerIndex];
@@ -193,9 +170,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
           let state = { ...prev };
 
-          // AI drawing
           if (state.turnPhase === 'drawing') {
-            // In Siamese mode, AI picks which rack to draw to
             if (isSiameseMode(state)) {
               const drawRack = siamesePickDrawRack(cp);
               state = { ...state, activeRack: drawRack };
@@ -204,30 +179,139 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             if (state.phase !== 'playing') return state;
           }
 
-          // AI discarding (aiTurn handles Siamese internally)
           if (state.turnPhase === 'discarding') {
             state = aiTurn(state);
           }
 
           return state;
         });
-      }, 600 + Math.random() * 500);
-      return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+        return;
+      case 'charleston-next-pass':
+        setCharlestonSubPhase('selecting');
+        setCharlestonReceivedCount(0);
+        return;
+      case 'charleston-start-playing':
+        setCharlestonSubPhase('done');
+        setGame(prev => ({
+          ...prev,
+          phase: 'playing',
+          turnPhase: 'discarding',
+          message: 'East discards first — select a tile to discard',
+        }));
+        return;
     }
-  }, [game.currentPlayerIndex, game.turnPhase, game.phase, startCallCountdown, clearAllTimers]);
+  }, [clearPendingAction, resolveCallingPhase]);
 
-  // Reset countdown ref when leaving calling phase
   useEffect(() => {
-    if (game.turnPhase !== 'calling') {
-      // Only clear the calling countdown, not the main game timer
-      if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
-      callDeadlineRef.current = null;
+    pendingActionRef.current = pendingAction;
+  }, [pendingAction]);
+
+  useEffect(() => {
+    clearSchedulerRefs();
+
+    if (!pendingAction || isPaused) {
+      return;
+    }
+
+    const deadline = Date.now() + pendingAction.remainingMs;
+    actionDeadlineRef.current = deadline;
+
+    if (pendingAction.kind === 'call-window') {
+      setCallCountdown(Math.max(0, Math.ceil(pendingAction.remainingMs / 1000)));
+      countdownIntervalRef.current = setInterval(() => {
+        const remainingMs = Math.max(0, deadline - Date.now());
+        const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+        setCallCountdown(remainingSeconds);
+      }, 250);
+    } else {
       setCallCountdown(null);
     }
-  }, [game.turnPhase]);
+
+    actionTimeoutRef.current = setTimeout(() => {
+      executePendingAction(pendingAction);
+    }, pendingAction.remainingMs);
+
+    return clearSchedulerRefs;
+  }, [pendingAction, isPaused, clearSchedulerRefs, executePendingAction]);
+
+  const handlePauseToggle = useCallback(() => {
+    if (isPaused) {
+      setIsPaused(false);
+      return;
+    }
+
+    const activeAction = pendingActionRef.current;
+    const deadline = actionDeadlineRef.current;
+
+    if (activeAction && deadline !== null) {
+      const remainingMs = Math.max(0, deadline - Date.now());
+      const pausedAction = { ...activeAction, remainingMs };
+      pendingActionRef.current = pausedAction;
+      setPendingAction(pausedAction);
+      if (pausedAction.kind === 'call-window') {
+        setCallCountdown(Math.max(0, Math.ceil(remainingMs / 1000)));
+      }
+    }
+
+    clearSchedulerRefs();
+    setIsPaused(true);
+  }, [isPaused, clearSchedulerRefs]);
+
+  // Game loop
+  useEffect(() => {
+    if (game.phase !== 'playing') {
+      clearPendingAction();
+      return;
+    }
+
+    if (isPaused) {
+      return;
+    }
+
+    const currentPlayer = game.players[game.currentPlayerIndex];
+
+    // === CALLING PHASE ===
+    if (game.turnPhase === 'calling') {
+      if (pendingActionRef.current?.kind !== 'call-window') {
+        schedulePendingAction('call-window', callWindowSeconds * 1000);
+      }
+      return;
+    }
+
+    // === HUMAN DRAWING ===
+    if (currentPlayer.isHuman && game.turnPhase === 'drawing') {
+      if (pendingActionRef.current?.kind !== 'human-draw') {
+        schedulePendingAction('human-draw', HUMAN_DRAW_DELAY_MS);
+      }
+      return;
+    }
+
+    // === HUMAN DISCARDING - wait for input ===
+    if (currentPlayer.isHuman && game.turnPhase === 'discarding') {
+      if (pendingActionRef.current) {
+        clearPendingAction();
+      }
+      return;
+    }
+
+    // === AI TURN ===
+    if (!currentPlayer.isHuman) {
+      if (pendingActionRef.current?.kind !== 'ai-turn') {
+        schedulePendingAction('ai-turn', OPPONENT_DECISION_SECONDS * 1000);
+      }
+    }
+  }, [game.currentPlayerIndex, game.turnPhase, game.phase, callWindowSeconds, isPaused, schedulePendingAction, clearPendingAction]);
+
+  useEffect(() => {
+    if (game.turnPhase !== 'calling' && pendingActionRef.current?.kind === 'call-window') {
+      clearPendingAction();
+    }
+  }, [game.turnPhase, clearPendingAction]);
 
   // Handle clicking on a tile in hand
   const handleTileClick = useCallback((index: number) => {
+    if (isPaused) return;
+
     // If in joker exchange mode, ignore hand clicks
     if (jokerExchangeMode) return;
 
@@ -286,17 +370,19 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         return { ...prev, selectedTileIndex: index };
       }
     });
-  }, [game.phase, game.discardPool.length, charlestonSubPhase, blankTradeMode, jokerExchangeMode, humanPlayer.hand, siamese]);
+  }, [isPaused, game.phase, game.discardPool.length, charlestonSubPhase, blankTradeMode, jokerExchangeMode, humanPlayer.hand, siamese]);
 
   // Handle selecting a discard tile during blank trade
   const handleBlankTradeSelect = useCallback((discardIndex: number) => {
+    if (isPaused) return;
     if (!blankTradeMode) return;
     setGame(prev => blankTrade(prev, blankTradeMode.blankIndex, discardIndex, siamese ? prev.activeRack : undefined));
     setBlankTradeMode(null);
-  }, [blankTradeMode, siamese]);
+  }, [isPaused, blankTradeMode, siamese]);
 
   // Handle joker exchange button
   const handleJokerExchangeStart = useCallback(() => {
+    if (isPaused) return;
     if (jokerExchangeMode) {
       setJokerExchangeMode(false);
       setJokerExchangeOptions([]);
@@ -310,10 +396,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setJokerExchangeMode(true);
     setJokerExchangeOptions(options);
     setGame(prev => ({ ...prev, message: 'Joker Exchange — click a Joker in an exposed set to swap' }));
-  }, [game, jokerExchangeMode]);
+  }, [isPaused, game, jokerExchangeMode]);
 
   // Handle clicking a joker in an exposure during joker exchange mode
   const handleJokerExchangeSelect = useCallback((tileId: string) => {
+    if (isPaused) return;
     if (!jokerExchangeMode) return;
     const option = jokerExchangeOptions.find(o => o.jokerTile.id === tileId);
     if (!option) return;
@@ -329,34 +416,24 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       }
       return newState;
     });
-  }, [jokerExchangeMode, jokerExchangeOptions]);
+  }, [isPaused, jokerExchangeMode, jokerExchangeOptions]);
 
   // Build a set of clickable joker tile IDs for exposure rendering
   const clickableJokerIds = new Set(jokerExchangeMode ? jokerExchangeOptions.map(o => o.jokerTile.id) : []);
 
   // Handle calling a discarded tile with a specific group size
   const handleCall = useCallback((groupSize?: CallGroupSize) => {
-    clearAllTimers();
+    if (isPaused) return;
+    clearPendingAction();
     setGame(prev => callTile(prev, 0, groupSize));
-  }, [clearAllTimers]);
+  }, [isPaused, clearPendingAction]);
 
   // Handle ignoring a discarded tile
   const handleIgnore = useCallback(() => {
-    clearAllTimers();
-    setGame(prev => {
-      if (prev.lastDiscardedBy === null) return passTurn(prev);
-      // Human passed — check AI in next-in-turn order (skill-aware)
-      for (let offset = 1; offset < prev.config.playerCount; offset++) {
-        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-        if (prev.players[i].isHuman) continue;
-        const aiCallSize = aiShouldCall(prev, i);
-        if (aiCallSize !== null) {
-          return callTile(prev, i, aiCallSize);
-        }
-      }
-      return passTurn(prev);
-    });
-  }, [clearAllTimers]);
+    if (isPaused) return;
+    clearPendingAction();
+    resolveCallingPhase();
+  }, [isPaused, clearPendingAction, resolveCallingPhase]);
 
   const handleSort = useCallback((type: 'suit' | 'rank') => {
     if (siamese) {
@@ -403,7 +480,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   }, [charlestonSelected.length]);
 
   const handleNewGame = useCallback(() => {
-    clearAllTimers();
+    clearPendingAction();
     setGame(createGame(config));
     setCharlestonSubPhase('pre');
     setCharlestonStep(0);
@@ -412,7 +489,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setBlankTradeMode(null);
     setJokerExchangeMode(false);
     setJokerExchangeOptions([]);
-  }, [config, clearAllTimers]);
+    setIsPaused(false);
+  }, [config, clearPendingAction]);
 
   // Plan hand management
   const handleAddPlan = useCallback((hand: Omit<PlanHand, 'planLabel'>) => {
@@ -438,18 +516,21 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   // Siamese: switch active rack
   const handleSwitchRack = useCallback((rack: 1 | 2) => {
+    if (isPaused) return;
     setGame(prev => ({ ...prev, activeRack: rack, selectedTileIndex: null }));
-  }, []);
+  }, [isPaused]);
 
   // Siamese: move a tile from one rack to another
   const handleMoveTileToOtherRack = useCallback((tileIndex: number, fromRack: 1 | 2) => {
+    if (isPaused) return;
     setGame(prev => swapTileBetweenRacks(prev, 0, fromRack, tileIndex));
-  }, []);
+  }, [isPaused]);
 
   // Declare Mah Jongg
   const handleDeclareMahJongg = useCallback(() => {
+    if (isPaused) return;
     setGame(prev => declareMahJongg(prev, 0));
-  }, []);
+  }, [isPaused]);
 
   const hasPlanHands = planHands.some(p => p !== null);
 
@@ -546,12 +627,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       // Move to next pass
       setCharlestonStep(nextStep);
       setCharlestonSubPhase('passed');
-      setTimeout(() => {
-        setCharlestonSubPhase('selecting');
-        setCharlestonReceivedCount(0);
-      }, 1200);
+      schedulePendingAction('charleston-next-pass', CHARLESTON_PASS_DELAY_MS);
     }
-  }, [charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount]);
+  }, [charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, schedulePendingAction]);
 
   // Courtesy pass handler
   const handleCourtesyPass = useCallback(() => {
@@ -589,8 +667,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     });
 
     setCharlestonSelected([]);
-    setTimeout(() => startPlaying(), 600);
-  }, [charlestonSelected, config.playerCount, startPlaying]);
+    schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
+  }, [charlestonSelected, config.playerCount, schedulePendingAction, startPlaying]);
 
   const handleContinueCharleston = useCallback(() => {
     setCharlestonStep(3);
@@ -1885,13 +1963,24 @@ function StarburstIcon() {
   );
 }
 
-function OpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
-  // Exposure groups shared between mobile and desktop renders
-  const exposureGroups = player.exposures.length > 0 ? (
-    <div className="flex gap-1 flex-wrap justify-center">
-      {player.exposures.map((group: TileType[], gi: number) => (
-        <div key={gi} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
-          {group.map((tile: TileType) => {
+const MOBILE_TOP_RACK_MASK_HEIGHT = 18;
+const MOBILE_SIDE_RACK_MASK_WIDTH = 18;
+const MOBILE_TOP_RACK_STEP = 13;
+const MOBILE_SIDE_RACK_STEP = 10;
+const MOBILE_DRAW_TILE_GAP = 8;
+
+function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void, tone: 'default' | 'alt' = 'default') {
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="flex gap-2 flex-wrap justify-center">
+      {groups.map((group, gi) => (
+        <div
+          key={gi}
+          className="flex gap-[2px] px-1 py-1 rounded-md"
+          style={{ background: tone === 'alt' ? 'rgba(181,112,79,0.08)' : 'rgba(255,253,247,0.08)' }}
+        >
+          {group.map((tile) => {
             const isClickable = clickableJokerIds?.has(tile.id);
             return (
               <div
@@ -1906,43 +1995,133 @@ function OpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { pl
         </div>
       ))}
     </div>
-  ) : null;
+  );
+}
+
+function renderExposureColumns(groups: TileType[][], tileRotation: string, clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void) {
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 items-center shrink-0 py-1">
+      {groups.map((group, gi) => (
+        <div key={gi} className="flex flex-col gap-[2px] items-center px-1 py-1 rounded-md" style={{ background: 'rgba(255,253,247,0.08)' }}>
+          {group.map((tile) => {
+            const isClickable = clickableJokerIds?.has(tile.id);
+            return (
+              <div
+                key={tile.id}
+                style={{ transform: tileRotation }}
+                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
+              >
+                <TileComponent tile={tile} size="sm" />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MobileTopConcealedRack({ tileCount, showDrawGap = false }: { tileCount: number; showDrawGap?: boolean }) {
+  if (tileCount <= 0) return null;
+
+  const totalWidth = 32 + Math.max(0, tileCount - 1) * MOBILE_TOP_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: MOBILE_TOP_RACK_MASK_HEIGHT }}>
+      <div className="absolute left-1/2 top-0 -translate-x-1/2" style={{ width: totalWidth, height: MOBILE_TOP_RACK_MASK_HEIGHT }}>
+        {Array.from({ length: tileCount }).map((_, i) => {
+          const left = i * MOBILE_TOP_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+          return (
+            <div key={i} className="absolute" style={{ left, top: -(44 - MOBILE_TOP_RACK_MASK_HEIGHT) }}>
+              <TileBack size="sm" />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MobileSideConcealedRack({
+  tileCount,
+  side,
+  showDrawGap = false,
+}: {
+  tileCount: number;
+  side: 'left' | 'right';
+  showDrawGap?: boolean;
+}) {
+  if (tileCount <= 0) return null;
+
+  const totalHeight = 44 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+  const tileLeft = side === 'left' ? -(32 - MOBILE_SIDE_RACK_MASK_WIDTH) : 0;
+
+  return (
+    <div
+      className="relative h-full overflow-hidden shrink-0"
+      style={{ width: MOBILE_SIDE_RACK_MASK_WIDTH, minWidth: MOBILE_SIDE_RACK_MASK_WIDTH }}
+    >
+      <div className="absolute left-0 top-1/2 -translate-y-1/2" style={{ width: 32, height: totalHeight }}>
+        {Array.from({ length: tileCount }).map((_, i) => {
+          const top = i * MOBILE_SIDE_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+          return (
+            <div key={i} className="absolute" style={{ top, left: tileLeft }}>
+              <TileBack size="sm" />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OpponentRow({
+  player,
+  isActive,
+  showDrawGap = false,
+  clickableJokerIds,
+  onJokerClick,
+}: {
+  player: any;
+  isActive: boolean;
+  showDrawGap?: boolean;
+  clickableJokerIds?: Set<string>;
+  onJokerClick?: (id: string) => void;
+}) {
+  const exposureGroups = renderExposureRows(player.exposures, clickableJokerIds, onJokerClick);
 
   return (
     <div className="flex flex-col items-center shrink-0 px-2">
-
-      {/* ── Mobile (<sm): status strip + peeking rack edge + exposures ─────────
-          The hidden rack shows only its top ~14 px — like tile backs sitting on
-          a rack just above the table edge, with exposures fully visible below. */}
-      <div className="sm:hidden w-full flex flex-col items-center">
-        <div className="flex items-center gap-1.5 py-0.5">
+      <div className="sm:hidden w-full flex flex-col items-center gap-1 pt-1">
+        <div className="flex items-center gap-1.5 flex-wrap justify-center">
           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
             background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
           }} />
-          <span className="text-[0.5rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.55)' }}>
+          <span className="text-[0.5rem] uppercase tracking-wider" style={{ color: 'rgba(255,253,247,0.65)' }}>
             {player.name}
           </span>
-          <span className="text-[0.45rem] px-1 rounded" style={{
-            background: 'rgba(255,253,247,0.06)',
-            color: 'rgba(255,253,247,0.3)',
+          <span className="text-[0.45rem] px-1.5 py-0.5 rounded-full" style={{
+            background: 'rgba(255,253,247,0.08)',
+            color: 'rgba(255,253,247,0.42)',
           }}>
-            {player.seatWind.toUpperCase()} · {player.hand.length}
+            {player.seatWind.toUpperCase()} · {player.hand.length} concealed
           </span>
+          {showDrawGap && (
+            <span className="text-[0.42rem] px-1.5 py-0.5 rounded-full" style={{
+              background: 'rgba(212,165,116,0.16)',
+              color: '#D4A574',
+            }}>
+              deciding
+            </span>
+          )}
         </div>
-        {/* Peek strip: overflow-hidden container shows only the topmost slice of
-            tile backs — the visual cue that a rack lives just above the table. */}
-        {player.hand.length > 0 && (
-          <div className="flex justify-center gap-0.5 overflow-hidden w-full" style={{ height: 14 }}>
-            {Array.from({ length: Math.min(5, player.hand.length) }).map((_, i) => (
-              <TileBack key={`${player.id}_mob_${i}`} size="sm" />
-            ))}
-          </div>
-        )}
-        {/* Exposures are gameplay-critical: always shown in full below the peek */}
-        {exposureGroups && <div className="mt-1">{exposureGroups}</div>}
+        <MobileTopConcealedRack tileCount={player.hand.length} showDrawGap={showDrawGap} />
+        {exposureGroups && <div className="mt-0.5">{exposureGroups}</div>}
       </div>
 
-      {/* ── Desktop (sm+): full face-down wall ───────────────────────────────── */}
       <div className="hidden sm:flex flex-col items-center py-1.5">
         <div className="flex items-center gap-2 mb-1">
           <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
@@ -1965,19 +2144,27 @@ function OpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { pl
         </div>
         {exposureGroups && <div className="mt-1">{exposureGroups}</div>}
       </div>
-
     </div>
   );
 }
 
-function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; side: 'left' | 'right'; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
+function OpponentColumn({
+  player,
+  isActive,
+  side,
+  showDrawGap = false,
+  clickableJokerIds,
+  onJokerClick,
+}: {
+  player: any;
+  isActive: boolean;
+  side: 'left' | 'right';
+  showDrawGap?: boolean;
+  clickableJokerIds?: Set<string>;
+  onJokerClick?: (id: string) => void;
+}) {
   const tileRotation = side === 'left' ? 'rotate(90deg)' : 'rotate(-90deg)';
-  // Visible pixel width of each tile in the mobile peek strip.
-  // sm tile backs are 32 px wide; 13 px shows ~40 % of the edge — enough to
-  // convey "rack here" without consuming horizontal board space.
-  const PEEK_W = 13;
 
-  // ── Desktop: horizontal tile backs stacked in a column ──────────────────
   const wallColumnFull = (
     <div className="flex flex-col gap-0.5 items-center shrink-0">
       {player.hand.map((_: any, i: number) => (
@@ -1986,53 +2173,10 @@ function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClic
     </div>
   );
 
-  // ── Mobile: portrait tile backs clipped to show only their inner edge ───
-  // For the LEFT column the INNER (right) edge of each tile faces the center,
-  // so we right-align tiles in the overflow-hidden container to expose that edge.
-  // For the RIGHT column the INNER (left) edge faces center — left-align instead.
-  const wallColumnPeek = (
-    <div
-      className="flex flex-col gap-0.5 shrink-0 py-1"
-      style={{
-        width: PEEK_W,
-        overflow: 'hidden',
-        alignItems: side === 'left' ? 'flex-end' : 'flex-start',
-      }}
-    >
-      {Array.from({ length: Math.min(6, player.hand.length) }).map((_, i) => (
-        <TileBack key={`${player.id}_mob_${i}`} size="sm" />
-      ))}
-    </div>
-  );
-
-  // Rotated exposures — same for both breakpoints, always fully visible
-  const exposuresColumn = player.exposures.length > 0 ? (
-    <div className="flex flex-col gap-1 items-center shrink-0 py-1">
-      {player.exposures.map((group: TileType[], gi: number) => (
-        <div key={gi} className="flex flex-col gap-0.5 items-center px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
-          {group.map((tile: TileType) => {
-            const isClickable = clickableJokerIds?.has(tile.id);
-            return (
-              <div
-                key={tile.id}
-                style={{ transform: tileRotation }}
-                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-              >
-                <TileComponent tile={tile} size="sm" />
-              </div>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  ) : null;
+  const exposuresColumn = renderExposureColumns(player.exposures, tileRotation, clickableJokerIds, onJokerClick);
 
   return (
-    // overflow-y-auto lets the column scroll in landscape when tiles overflow
     <div className="shrink-0 overflow-y-auto">
-
-      {/* ── Desktop (sm+): info label + full horizontal-tile wall ────────────── */}
       <div className="hidden sm:flex items-start justify-center py-2 px-1">
         <div className="flex flex-col items-center w-8 shrink-0 pt-0.5">
           <div className={`w-2 h-2 rounded-full mb-1 shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
@@ -2058,72 +2202,64 @@ function OpponentColumn({ player, isActive, side, clickableJokerIds, onJokerClic
         )}
       </div>
 
-      {/* ── Mobile (<sm): slim peek edge + rotated exposures ────────────────────
-          Wall is replaced by a PEEK_W-px strip showing the inner tile edge.
-          Exposures are kept at full size — they carry real gameplay information.
-          The whole column can scroll vertically in landscape if exposures are tall. */}
-      <div className="sm:hidden flex items-start py-1">
-        {side === 'left' ? (
-          <>{wallColumnPeek}{exposuresColumn}</>
-        ) : (
-          <>{exposuresColumn}{wallColumnPeek}</>
-        )}
+      <div className="sm:hidden flex items-stretch gap-1 py-1 h-full">
+        {side === 'left' && <MobileSideConcealedRack tileCount={player.hand.length} side={side} showDrawGap={showDrawGap} />}
+        <div className="flex flex-col items-center justify-center gap-2 min-h-0">
+          <div className="flex flex-col items-center gap-1">
+            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
+              background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
+            }} />
+            <span className="text-[0.42rem] uppercase tracking-[0.18em]" style={{
+              color: 'rgba(255,253,247,0.45)',
+              writingMode: 'vertical-lr',
+            }}>
+              {player.seatWind.toUpperCase()}
+            </span>
+            <span className="text-[0.42rem] px-1 py-0.5 rounded-full" style={{
+              background: 'rgba(255,253,247,0.08)',
+              color: 'rgba(255,253,247,0.4)',
+            }}>
+              {player.hand.length}
+            </span>
+          </div>
+          {exposuresColumn}
+        </div>
+        {side === 'right' && <MobileSideConcealedRack tileCount={player.hand.length} side={side} showDrawGap={showDrawGap} />}
       </div>
-
     </div>
   );
 }
 
 // ─── Siamese Opponent Row (shows two racks of face-down tiles) ────────
 
-function SiameseOpponentRow({ player, isActive, clickableJokerIds, onJokerClick }: { player: any; isActive: boolean; clickableJokerIds?: Set<string>; onJokerClick?: (id: string) => void }) {
+function SiameseOpponentRow({
+  player,
+  isActive,
+  activeRack,
+  showDrawGap = false,
+  clickableJokerIds,
+  onJokerClick,
+}: {
+  player: any;
+  isActive: boolean;
+  activeRack: 1 | 2;
+  showDrawGap?: boolean;
+  clickableJokerIds?: Set<string>;
+  onJokerClick?: (id: string) => void;
+}) {
   const totalTiles = player.hand.length + player.hand2.length;
 
-  // Exposure rows shared between mobile and desktop renders
   const exposureRows = (player.exposures.length > 0 || player.exposures2.length > 0) ? (
     <div className="flex gap-2 flex-wrap justify-center">
-      {player.exposures.map((group: TileType[], gi: number) => (
-        <div key={`e1-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(255,253,247,0.06)' }}>
-          {group.map((tile: TileType) => {
-            const isClickable = clickableJokerIds?.has(tile.id);
-            return (
-              <div
-                key={tile.id}
-                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-              >
-                <TileComponent tile={tile} size="sm" />
-              </div>
-            );
-          })}
-        </div>
-      ))}
-      {player.exposures2.map((group: TileType[], gi: number) => (
-        <div key={`e2-${gi}`} className="flex gap-0.5 px-0.5 py-0.5 rounded" style={{ background: 'rgba(181,112,79,0.06)' }}>
-          {group.map((tile: TileType) => {
-            const isClickable = clickableJokerIds?.has(tile.id);
-            return (
-              <div
-                key={tile.id}
-                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
-                onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
-              >
-                <TileComponent tile={tile} size="sm" />
-              </div>
-            );
-          })}
-        </div>
-      ))}
+      {renderExposureRows(player.exposures, clickableJokerIds, onJokerClick)}
+      {renderExposureRows(player.exposures2, clickableJokerIds, onJokerClick, 'alt')}
     </div>
   ) : null;
 
   return (
     <div className="flex flex-col items-center shrink-0 px-2">
-
-      {/* ── Mobile (<sm): combined peek strip for both racks ────────────────────
-          One peek strip represents both racks; exposures shown in full below. */}
-      <div className="sm:hidden w-full flex flex-col items-center">
-        <div className="flex items-center gap-1.5 py-0.5">
+      <div className="sm:hidden w-full flex flex-col items-center gap-1 pt-1">
+        <div className="flex items-center gap-1.5 py-0.5 flex-wrap justify-center">
           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
             background: isActive ? '#D4A574' : 'rgba(255,253,247,0.2)',
           }} />
@@ -2137,17 +2273,34 @@ function SiameseOpponentRow({ player, isActive, clickableJokerIds, onJokerClick 
             {player.seatWind.toUpperCase()} · {totalTiles}
           </span>
         </div>
-        {totalTiles > 0 && (
-          <div className="flex justify-center gap-0.5 overflow-hidden w-full" style={{ height: 14 }}>
-            {Array.from({ length: Math.min(5, totalTiles) }).map((_, i) => (
-              <TileBack key={`${player.id}_siam_mob_${i}`} size="sm" />
-            ))}
+        <div className="w-full flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[0.4rem] uppercase tracking-[0.16em] shrink-0 w-6" style={{ color: 'rgba(255,253,247,0.3)' }}>R1</span>
+            <div className="flex-1">
+              <MobileTopConcealedRack tileCount={player.hand.length} showDrawGap={showDrawGap && activeRack === 1} />
+            </div>
+            <span className="text-[0.42rem] px-1 py-0.5 rounded-full shrink-0" style={{
+              background: 'rgba(255,253,247,0.08)',
+              color: 'rgba(255,253,247,0.42)',
+            }}>
+              {player.hand.length}
+            </span>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <span className="text-[0.4rem] uppercase tracking-[0.16em] shrink-0 w-6" style={{ color: 'rgba(255,253,247,0.3)' }}>R2</span>
+            <div className="flex-1">
+              <MobileTopConcealedRack tileCount={player.hand2.length} showDrawGap={showDrawGap && activeRack === 2} />
+            </div>
+            <span className="text-[0.42rem] px-1 py-0.5 rounded-full shrink-0" style={{
+              background: 'rgba(255,253,247,0.08)',
+              color: 'rgba(255,253,247,0.42)',
+            }}>
+              {player.hand2.length}
+            </span>
+          </div>
+        </div>
         {exposureRows && <div className="mt-1">{exposureRows}</div>}
       </div>
-
-      {/* ── Desktop (sm+): two labeled racks + exposures ─────────────────────── */}
       <div className="hidden sm:flex flex-col items-center py-1.5">
         <div className="flex items-center gap-2 mb-1">
           <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'animate-pulse' : ''}`} style={{
