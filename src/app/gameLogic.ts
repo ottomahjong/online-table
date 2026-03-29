@@ -653,7 +653,27 @@ const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = (() => {
   for (let d = 0; d <= 4; d++) add(false, shiftTokenStr('FFF:n 123:g 4444:r 5555:b', d));
   for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('FF:n 11:b 222:b 3333:b DDD:n', d));
   for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('111:g 222:g 3333:r DD:g DD:r', d));
-  for (let d = 0; d <= 4; d++) add(false, shiftTokenStr('112345:b 1111:b 1111:b', d));
+  // CR/7: "Any 5 Consec. Nos, Pair Any Nos, In Pung, Kongs Match Pair"
+  // The pair can appear at ANY of the 5 positions within the run (2025 clarification).
+  // Both kongs must match the paired number; the run and kongs may be in 1 or 3 suits.
+  // Templates: pair at run position 0→4. shiftTokenStr moves all digits up by d.
+  for (let d = 0; d <= 4; d++) {
+    // Pair at run position 0 (first number): e.g. 1,1,2,3,4,5 + kongs 1111
+    add(false, shiftTokenStr('112345:b 1111:b 1111:b', d)); // 1-suit
+    add(false, shiftTokenStr('112345:b 1111:g 1111:r', d)); // 3-suit
+    // Pair at run position 1 (second number): e.g. 1,2,2,3,4,5 + kongs 2222
+    add(false, shiftTokenStr('122345:b 2222:b 2222:b', d)); // 1-suit
+    add(false, shiftTokenStr('122345:b 2222:g 2222:r', d)); // 3-suit
+    // Pair at run position 2 (middle number): e.g. 1,2,3,3,4,5 + kongs 3333
+    add(false, shiftTokenStr('123345:b 3333:b 3333:b', d)); // 1-suit
+    add(false, shiftTokenStr('123345:b 3333:g 3333:r', d)); // 3-suit
+    // Pair at run position 3 (fourth number): e.g. 1,2,3,4,4,5 + kongs 4444
+    add(false, shiftTokenStr('123445:b 4444:b 4444:b', d)); // 1-suit
+    add(false, shiftTokenStr('123445:b 4444:g 4444:r', d)); // 3-suit
+    // Pair at run position 4 (last number): e.g. 1,2,3,4,5,5 + kongs 5555
+    add(false, shiftTokenStr('123455:b 5555:b 5555:b', d)); // 1-suit
+    add(false, shiftTokenStr('123455:b 5555:g 5555:r', d)); // 3-suit
+  }
   for (let d = 0; d <= 6; d++) add(true, shiftTokenStr('FF:n 1:g 22:g 333:g 1:r 22:r 333:r', d));
   // 13579
   add(false, '11:b 333:b 5555:b 777:b 99:b', '11:g 333:g 5555:r 777:r 99:b');
@@ -855,7 +875,7 @@ function buildTileCounts(tiles: Tile[]): { counts: Map<string, number>; jokerCou
   return { counts, jokerCount };
 }
 
-function checkSimpleWin(player: Player): boolean {
+export function checkSimpleWin(player: Player): boolean {
   const allTiles = [...player.hand, ...player.exposures.flat()];
   const totalTiles = allTiles.length;
   const hasExposures = player.exposures.length > 0;
