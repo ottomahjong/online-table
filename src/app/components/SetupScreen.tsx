@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { GameConfig } from '../types';
 import { TileComponent, TileBack } from './Tile';
-import wordmarkPaths from '../../imports/svg-i64mkcl8d2';
 import type { Tile as TileType } from '../types';
 
 interface SetupScreenProps {
@@ -46,24 +45,21 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
       <header className="py-8 text-center" style={{ background: 'linear-gradient(180deg, #FFFDF7 0%, #F5F0E6 100%)' }}>
         <div className="flex items-center justify-center gap-4 mb-3">
           <Starburst />
-          {/* Otto Mahjong Wordmark */}
-          <svg className="block" style={{ height: 28, width: 'auto' }} fill="none" preserveAspectRatio="xMidYMid meet" viewBox="0 0 149.76 12.48">
-            <path d={wordmarkPaths.p3f729400} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p2b6d020} fill="#1B2A4A" />
-            <path d={wordmarkPaths.pc77f6f0} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p1a2a1800} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p32a54d00} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p1db28300} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p2027a340} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p29014460} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p35b5ad80} fill="#1B2A4A" />
-            <path d={wordmarkPaths.p2fe4d780} fill="#1B2A4A" />
-            <path d={wordmarkPaths.pc75f000} fill="#1B2A4A" />
-          </svg>
+          <span style={{
+            color: '#1B2A4A',
+            fontFamily: "'Futura', 'Trebuchet MS', sans-serif",
+            fontSize: '1.85rem',
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            lineHeight: 1,
+          }}>
+            Otto Online
+          </span>
           <Starburst />
         </div>
         <p className="tracking-[0.3em] uppercase" style={{ color: '#B5704F', fontSize: '0.75rem', fontWeight: 600 }}>
-          One Table, Three Others
+          Online American Mahjong Practice
         </p>
       </header>
 
@@ -265,7 +261,7 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
 
       {/* Footer */}
       <footer className="py-4 text-center" style={{ color: '#8B9D83', fontSize: '0.75rem' }}>
-        <p>Otto Mahjong &middot; One Table, Three Others</p>
+        <p>Otto Online &middot; American Mahjong Practice</p>
       </footer>
     </div>
   );
