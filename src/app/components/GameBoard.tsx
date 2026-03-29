@@ -2009,8 +2009,8 @@ function StarburstIcon() {
 
 const MOBILE_TOP_RACK_MASK_HEIGHT = 18;
 const MOBILE_SIDE_RACK_MASK_WIDTH = 22;
-const MOBILE_TOP_RACK_STEP = 32;
-const MOBILE_SIDE_RACK_STEP = 24;
+const MOBILE_TOP_RACK_STEP = 33;
+const MOBILE_SIDE_RACK_STEP = 33;
 const MOBILE_DRAW_TILE_GAP = 8;
 
 function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void, tone: 'default' | 'alt' = 'default') {
@@ -2100,8 +2100,8 @@ function MobileSideConcealedRack({
 }) {
   if (tileCount <= 0) return null;
 
-  const tileAngle = side === 'left' ? 45 : -45;
-  const totalHeight = 52 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
+  const tileAngle = side === 'left' ? 90 : -90;
+  const totalHeight = 44 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
   const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -2;
 
   return (
