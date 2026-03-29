@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, canCall, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg } from '../gameLogic';
+import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, ArrowDown, Lightbulb, ArrowUpDown } from 'lucide-react';
+import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
 import wordmarkPaths from '../../imports/svg-i64mkcl8d2';
 
 
@@ -257,14 +257,20 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setIsPaused(true);
   }, [isPaused, clearSchedulerRefs]);
 
+  const canPauseGame = game.phase === 'playing' || game.phase === 'charleston';
+
   // Game loop
   useEffect(() => {
-    if (game.phase !== 'playing') {
+    if (game.phase === 'gameOver') {
       clearPendingAction();
       return;
     }
 
     if (isPaused) {
+      return;
+    }
+
+    if (game.phase !== 'playing') {
       return;
     }
 
@@ -555,6 +561,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       : ArrowUp;
 
   const handleStartCharleston = useCallback(() => {
+    if (isPaused) return;
     setCharlestonSubPhase('selecting');
     setCharlestonSelected([]);
     setCharlestonStep(0);
@@ -562,7 +569,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       ...prev,
       message: 'First Charleston — select 3 tiles to pass right',
     }));
-  }, []);
+  }, [isPaused]);
 
   // Start playing (East discards first — no draw needed since East has 14 tiles)
   const startPlaying = useCallback(() => {
@@ -590,6 +597,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   }, [config.playerCount, startPlaying]);
 
   const handleCharlestonPass = useCallback(() => {
+    if (isPaused) return;
     if (charlestonSelected.length !== 3) return;
     const stepInfo = CHARLESTON_STEPS[charlestonStep];
     if (!stepInfo) return;
@@ -629,10 +637,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       setCharlestonSubPhase('passed');
       schedulePendingAction('charleston-next-pass', CHARLESTON_PASS_DELAY_MS);
     }
-  }, [charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, schedulePendingAction]);
+  }, [isPaused, charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, schedulePendingAction]);
 
   // Courtesy pass handler
   const handleCourtesyPass = useCallback(() => {
+    if (isPaused) return;
     if (charlestonSelected.length === 0) {
       // Skip courtesy pass
       startPlaying();
@@ -668,20 +677,23 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
     setCharlestonSelected([]);
     schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
-  }, [charlestonSelected, config.playerCount, schedulePendingAction, startPlaying]);
+  }, [isPaused, charlestonSelected, config.playerCount, schedulePendingAction, startPlaying]);
 
   const handleContinueCharleston = useCallback(() => {
+    if (isPaused) return;
     setCharlestonStep(3);
     setCharlestonSubPhase('selecting');
     setCharlestonReceivedCount(0);
-  }, []);
+  }, [isPaused]);
 
   const handleEndCharleston = useCallback(() => {
+    if (isPaused) return;
     // Declining second charleston — go to courtesy pass
     goToCourtesyOrPlay();
-  }, [goToCourtesyOrPlay]);
+  }, [isPaused, goToCourtesyOrPlay]);
 
   const handleSkipCharleston = useCallback(() => {
+    if (isPaused) return;
     // Skipping Charleston entirely — East discards first, no courtesy pass
     setCharlestonSubPhase('done');
     setGame(prev => ({
@@ -690,7 +702,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       turnPhase: 'discarding',
       message: 'East discards first — select a tile to discard',
     }));
-  }, []);
+  }, [isPaused]);
 
   const isCharlestonSelecting = game.phase === 'charleston' && (charlestonSubPhase === 'selecting' || charlestonSubPhase === 'courtesy');
 
@@ -735,6 +747,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          {canPauseGame && (
+            <button
+              onClick={handlePauseToggle}
+              className="px-3 py-1 rounded text-[0.65rem] uppercase tracking-wider transition-colors hover:bg-white/10 flex items-center gap-1.5"
+              style={{ color: isPaused ? '#FFFDF7' : '#D4A574', border: '1px solid rgba(212,165,116,0.3)', background: isPaused ? 'rgba(181,112,79,0.35)' : 'transparent' }}
+              title={isPaused ? 'Resume game' : 'Pause game'}
+            >
+              {isPaused ? <Play size={12} /> : <Pause size={12} />}
+              {isPaused ? 'Resume' : 'Pause'}
+            </button>
+          )}
           {tipsEnabled && (
             <span className="text-[0.55rem] px-2 py-0.5 rounded-full flex items-center gap-1" style={{
               background: 'rgba(45,106,79,0.25)',
@@ -784,6 +807,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             <OpponentRow
               player={game.players[2]}
               isActive={game.currentPlayerIndex === 2}
+              showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 2 && game.turnPhase === 'discarding'}
               clickableJokerIds={clickableJokerIds}
               onJokerClick={handleJokerExchangeSelect}
             />
@@ -794,6 +818,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             <SiameseOpponentRow
               player={game.players[1]}
               isActive={game.currentPlayerIndex === 1}
+              activeRack={activeRack}
+              showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 1 && game.turnPhase === 'discarding'}
               clickableJokerIds={clickableJokerIds}
               onJokerClick={handleJokerExchangeSelect}
             />
@@ -807,6 +833,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[3]}
                 isActive={game.currentPlayerIndex === 3}
                 side="left"
+                showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 3 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
               />
@@ -860,9 +887,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   )}
 
                   {/* Discard Area
-                      Mobile maxHeight is raised because opponent racks are now
-                      slim peek strips (~25 px) rather than full tile walls,
-                      reclaiming significant vertical space for the center. */}
+                      Mobile maxHeight is capped so the bottom rack and controls
+                      stay in view while the center discard field remains readable. */}
                   <div className="rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
                     background: blankTradeMode ? 'rgba(181,112,79,0.2)' : 'rgba(255,253,247,0.1)',
                     border: blankTradeMode ? '2px solid rgba(181,112,79,0.6)' : '1px solid rgba(255,253,247,0.12)',
@@ -1001,6 +1027,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[1]}
                 isActive={game.currentPlayerIndex === 1}
                 side="right"
+                showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 1 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
               />
@@ -1551,9 +1578,15 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Claiming Discards</p>
-                <p>When an opponent discards, you have <strong style={{ color: '#1B2A4A' }}>{callWindowSeconds} seconds</strong> to claim{tipsEnabled ? ' (extended with Tips)' : ''}. You can use matching tiles and/or Jokers from your hand to form the group.</p>
+                <p>When an opponent discards, you have <strong style={{ color: '#1B2A4A' }}>{callWindowSeconds} seconds</strong> to claim. You can use matching tiles and/or Jokers from your hand to form the group.</p>
                 <p><strong style={{ color: '#1B2A4A' }}>Group sizes:</strong> Choose Pung (3), Kong (4), Quint (5), or Sextet (6) when calling. Each button shows how many Jokers will be used.</p>
                 <p><strong style={{ color: '#1B2A4A' }}>Priority:</strong> Mah Jongg claims always beat exposure claims. For equal claims, next-in-turn has preference.</p>
+              </div>
+
+              <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
+                <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Pacing &amp; Pause</p>
+                <p>Opponents take about <strong style={{ color: '#1B2A4A' }}>{OPPONENT_DECISION_SECONDS} seconds</strong> to choose a discard or joker exchange line, giving you time to read table state.</p>
+                <p>Use the <strong style={{ color: '#1B2A4A' }}>Pause</strong> button at any time to freeze timers, turn progress, and countdowns until you resume.</p>
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
@@ -1568,6 +1601,23 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
       {/* NMJL Card Modal */}
       <NMJLCard isOpen={showNMJL} onClose={() => setShowNMJL(false)} planHands={planHands} onAddPlan={handleAddPlan} playerBarHeight={playerBarHeight} />
+
+      {isPaused && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4 pointer-events-none" style={{ background: 'rgba(17,18,30,0.4)' }}>
+          <div
+            className="rounded-xl px-5 py-4 text-center pointer-events-auto"
+            style={{ background: 'rgba(27,42,74,0.92)', border: '1px solid rgba(212,165,116,0.35)', boxShadow: '0 12px 32px rgba(0,0,0,0.35)' }}
+          >
+            <div className="flex items-center justify-center gap-2 mb-2" style={{ color: '#FFFDF7' }}>
+              <Pause size={16} />
+              <span className="uppercase tracking-[0.14em]" style={{ fontSize: '0.72rem', fontWeight: 700 }}>Game Paused</span>
+            </div>
+            <p style={{ color: 'rgba(255,253,247,0.72)', fontSize: '0.72rem', maxWidth: 260 }}>
+              Timers and turn progress are frozen. Tap Resume in the top bar to continue from this exact state.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Game Over Modal */}
       {game.phase === 'gameOver' && (
