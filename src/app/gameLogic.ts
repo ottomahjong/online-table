@@ -371,6 +371,29 @@ export interface CallOption {
   jokersUsed: number;
 }
 
+function canUseDiscardForMahJongg(state: GameState, playerIndex: number): boolean {
+  if (state.phase !== 'playing') return false;
+  if (state.turnPhase !== 'calling') return false;
+  if (state.lastDiscarded === null) return false;
+  if (state.lastDiscardedBy === null || state.lastDiscardedBy === playerIndex) return false;
+  if (isSiameseMode(state)) return false;
+
+  const discard = state.lastDiscarded;
+  if (discard.type === 'special' && discard.specialType === 'joker') return false;
+
+  const player = state.players[playerIndex];
+  const candidatePlayer: Player = {
+    ...player,
+    hand: [...player.hand, discard],
+  };
+
+  return checkSimpleWin(candidatePlayer);
+}
+
+export function canClaimMahJonggOnDiscard(state: GameState, playerIndex: number): boolean {
+  return canUseDiscardForMahJongg(state, playerIndex);
+}
+
 /**
  * Returns the list of valid group sizes the player can call for.
  * The discarded tile counts as 1, so the player needs (size - 1) tiles
@@ -384,6 +407,10 @@ export function getCallOptions(state: GameState, playerIndex: number): CallOptio
 
   const player = state.players[playerIndex];
   const discard = state.lastDiscarded;
+
+  if (discard.type === 'special' && discard.specialType === 'joker') {
+    return [];
+  }
 
   // Count matching tiles in hand (not jokers)
   const matchCount = player.hand.filter(t => tilesMatch(t, discard)).length;
@@ -523,6 +550,36 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
     message: updatedPlayer.isHuman
       ? `You called for a ${sizeLabel}! Now discard a tile.`
       : `${updatedPlayer.name} called for a ${sizeLabel}!`,
+  };
+}
+
+export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): GameState {
+  if (!canUseDiscardForMahJongg(state, playerIndex)) {
+    return state;
+  }
+
+  const discard = state.lastDiscarded!;
+  const player = state.players[playerIndex];
+  const newPlayers = state.players.map((p, i) => (
+    i === playerIndex
+      ? { ...p, hand: [...p.hand, discard] }
+      : p
+  ));
+
+  return {
+    ...state,
+    players: newPlayers,
+    discardPool: state.discardPool.slice(0, -1),
+    currentPlayerIndex: playerIndex,
+    phase: 'gameOver',
+    turnPhase: 'waiting',
+    winner: playerIndex,
+    lastDiscarded: null,
+    lastDiscardedBy: null,
+    selectedTileIndex: null,
+    message: player.isHuman
+      ? 'Mah Jongg! You claimed the discard and win!'
+      : `${player.name} called Mah Jongg on the discard!`,
   };
 }
 
