@@ -88,6 +88,8 @@ export function createGame(config: GameConfig): GameState {
       exposures: [],
       hand2: [],
       exposures2: [],
+      rack1Locked: false,
+      rack2Locked: false,
       isHuman: i === 0,
       seatWind: seatWinds[i],
     });
@@ -148,9 +150,12 @@ export function createGame(config: GameConfig): GameState {
     const tile = wall.shift();
     if (tile) players[p].hand.push(tile);
   }
-  // East (player 0) picks one extra = 14 tiles, discards first
-  const extraEastTile = wall.shift();
-  if (extraEastTile) players[0].hand.push(extraEastTile);
+  // Solo practice starts with 13 tiles so the player can Charleston into a line.
+  if (config.playerCount !== 1) {
+    // East (player 0) picks one extra = 14 tiles, discards first
+    const extraEastTile = wall.shift();
+    if (extraEastTile) players[0].hand.push(extraEastTile);
+  }
 
   // 3-player: no Charleston per NMJL rules — straight to play
   if (config.playerCount === 3) {
@@ -181,7 +186,9 @@ export function createGame(config: GameConfig): GameState {
     turnPhase: 'waiting',
     lastDiscarded: null,
     lastDiscardedBy: null,
-    message: 'Charleston — select 3 tiles to pass',
+    message: config.playerCount === 1
+      ? 'Solo Charleston — select 3 tiles to pass out and draw 3 new tiles'
+      : 'Charleston — select 3 tiles to pass',
     winner: null,
     selectedTileIndex: null,
     activeRack: 1,
@@ -193,6 +200,31 @@ export function createGame(config: GameConfig): GameState {
 /** Check if this game is in Siamese (2-player dual-rack) mode */
 export function isSiameseMode(state: GameState): boolean {
   return state.config.playerCount === 2;
+}
+
+export function isRackLocked(player: Player, rack: 1 | 2): boolean {
+  return rack === 1 ? player.rack1Locked : player.rack2Locked;
+}
+
+function lockRack(player: Player, rack: 1 | 2): Player {
+  return rack === 1
+    ? { ...player, rack1Locked: true }
+    : { ...player, rack2Locked: true };
+}
+
+function getPlayableRack(player: Player, preferredRack: 1 | 2 = 1): 1 | 2 {
+  if (!isRackLocked(player, preferredRack)) return preferredRack;
+  return preferredRack === 1 ? 2 : 1;
+}
+
+function checkRackWin(player: Player, rack: 1 | 2): boolean {
+  return checkSimpleWin({
+    ...player,
+    hand: rack === 1 ? player.hand : player.hand2,
+    exposures: rack === 1 ? player.exposures : player.exposures2,
+    hand2: [],
+    exposures2: [],
+  });
 }
 
 /** Get the active hand for a player in Siamese mode */
@@ -213,6 +245,8 @@ export function swapTileBetweenRacks(
   tileIndex: number
 ): GameState {
   const player = state.players[playerIndex];
+  const toRack: 1 | 2 = fromRack === 1 ? 2 : 1;
+  if (isRackLocked(player, fromRack) || isRackLocked(player, toRack)) return state;
   const fromHand = fromRack === 1 ? player.hand : player.hand2;
   if (tileIndex < 0 || tileIndex >= fromHand.length) return state;
 
@@ -251,8 +285,9 @@ export function drawTile(state: GameState): GameState {
   const newPlayers = state.players.map((p, i) => {
     if (i !== state.currentPlayerIndex) return p;
     if (siamese) {
+      const drawRack = getPlayableRack(p, state.activeRack);
       // In Siamese, draw to the active rack
-      if (state.activeRack === 2) {
+      if (drawRack === 2) {
         return { ...p, hand2: [...p.hand2, tile] };
       }
     }
@@ -297,6 +332,7 @@ export function drawTile(state: GameState): GameState {
     wall: newWall,
     turnPhase: 'discarding',
     selectedTileIndex: null,
+    activeRack: siamese ? getPlayableRack(currentPlayer, state.activeRack) : state.activeRack,
     message: isHuman
       ? (siamese ? 'Select a tile to discard from either rack' : 'Select a tile to discard (click once to select, again to discard)')
       : `${currentPlayer.name} is thinking...`,
@@ -311,7 +347,8 @@ export function discardTile(state: GameState, tileIndex: number, rack?: 1 | 2): 
 
   const player = state.players[state.currentPlayerIndex];
   const siamese = isSiameseMode(state);
-  const effectiveRack = siamese ? (rack ?? state.activeRack) : 1;
+  const effectiveRack = siamese ? getPlayableRack(player, rack ?? state.activeRack) : 1;
+  if (siamese && isRackLocked(player, effectiveRack)) return state;
   const hand = effectiveRack === 2 ? player.hand2 : player.hand;
 
   if (tileIndex < 0 || tileIndex >= hand.length) return state;
@@ -354,6 +391,7 @@ export function passTurn(state: GameState): GameState {
     lastDiscarded: null,
     lastDiscardedBy: null,
     selectedTileIndex: null,
+    activeRack: isSiameseMode(state) ? getPlayableRack(nextPlayer, state.activeRack) : state.activeRack,
     message: nextPlayer.isHuman
       ? 'Your turn — drawing a tile...'
       : `${nextPlayer.name}'s turn...`,
@@ -371,27 +409,37 @@ export interface CallOption {
   jokersUsed: number;
 }
 
-function canUseDiscardForMahJongg(state: GameState, playerIndex: number): boolean {
-  if (state.phase !== 'playing') return false;
-  if (state.turnPhase !== 'calling') return false;
-  if (state.lastDiscarded === null) return false;
-  if (state.lastDiscardedBy === null || state.lastDiscardedBy === playerIndex) return false;
-  if (isSiameseMode(state)) return false;
+function getDiscardMahJonggRack(state: GameState, playerIndex: number): 1 | 2 | null {
+  if (state.phase !== 'playing') return null;
+  if (state.turnPhase !== 'calling') return null;
+  if (state.lastDiscarded === null) return null;
+  if (state.lastDiscardedBy === null || state.lastDiscardedBy === playerIndex) return null;
 
   const discard = state.lastDiscarded;
-  if (discard.type === 'special' && discard.specialType === 'joker') return false;
+  if (discard.type === 'special' && discard.specialType === 'joker') return null;
 
   const player = state.players[playerIndex];
-  const candidatePlayer: Player = {
-    ...player,
-    hand: [...player.hand, discard],
-  };
+  if (isSiameseMode(state)) {
+    const preferredRack = getPlayableRack(player, state.activeRack);
+    const rackOrder: (1 | 2)[] = preferredRack === 1 ? [1, 2] : [2, 1];
+    for (const rack of rackOrder) {
+      if (isRackLocked(player, rack)) continue;
+      const candidatePlayer: Player = rack === 1
+        ? { ...player, hand: [...player.hand, discard] }
+        : { ...player, hand2: [...player.hand2, discard] };
+      if (checkRackWin(candidatePlayer, rack)) {
+        return rack;
+      }
+    }
+    return null;
+  }
 
-  return checkSimpleWin(candidatePlayer);
+  const candidatePlayer: Player = { ...player, hand: [...player.hand, discard] };
+  return checkSimpleWin(candidatePlayer) ? 1 : null;
 }
 
 export function canClaimMahJonggOnDiscard(state: GameState, playerIndex: number): boolean {
-  return canUseDiscardForMahJongg(state, playerIndex);
+  return getDiscardMahJonggRack(state, playerIndex) !== null;
 }
 
 /**
@@ -554,32 +602,50 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
 }
 
 export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): GameState {
-  if (!canUseDiscardForMahJongg(state, playerIndex)) {
+  const winningRack = getDiscardMahJonggRack(state, playerIndex);
+  if (winningRack === null) {
     return state;
   }
 
   const discard = state.lastDiscarded!;
   const player = state.players[playerIndex];
-  const newPlayers = state.players.map((p, i) => (
-    i === playerIndex
-      ? { ...p, hand: [...p.hand, discard] }
-      : p
-  ));
+  const updatedPlayer = winningRack === 1
+    ? lockRack({ ...player, hand: [...player.hand, discard] }, 1)
+    : lockRack({ ...player, hand2: [...player.hand2, discard] }, 2);
+  const newPlayers = state.players.map((p, i) => (i === playerIndex ? updatedPlayer : p));
 
+  if (!isSiameseMode(state) || checkSiameseWin(updatedPlayer)) {
+    return {
+      ...state,
+      players: newPlayers,
+      discardPool: state.discardPool.slice(0, -1),
+      currentPlayerIndex: playerIndex,
+      phase: 'gameOver',
+      turnPhase: 'waiting',
+      winner: playerIndex,
+      lastDiscarded: null,
+      lastDiscardedBy: null,
+      selectedTileIndex: null,
+      message: player.isHuman
+        ? 'Mah Jongg! You claimed the discard and win!'
+        : `${player.name} called Mah Jongg on the discard!`,
+    };
+  }
+
+  const nextIndex = (playerIndex + 1) % state.config.playerCount;
   return {
     ...state,
     players: newPlayers,
     discardPool: state.discardPool.slice(0, -1),
-    currentPlayerIndex: playerIndex,
-    phase: 'gameOver',
-    turnPhase: 'waiting',
-    winner: playerIndex,
+    currentPlayerIndex: nextIndex,
+    turnPhase: 'drawing',
     lastDiscarded: null,
     lastDiscardedBy: null,
     selectedTileIndex: null,
+    activeRack: getPlayableRack(updatedPlayer, winningRack === 1 ? 2 : 1),
     message: player.isHuman
-      ? 'Mah Jongg! You claimed the discard and win!'
-      : `${player.name} called Mah Jongg on the discard!`,
+      ? `Rack ${winningRack} is locked with Mah Jongg. Continue building the other rack.`
+      : `${player.name} locked rack ${winningRack} with Mah Jongg.`,
   };
 }
 
@@ -1166,6 +1232,9 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
   const siamese = isSiameseMode(state);
 
   if (siamese) {
+    const activeRack = getPlayableRack(player, state.activeRack);
+    const otherRack: 1 | 2 = activeRack === 1 ? 2 : 1;
+
     if (checkSiameseWin(player)) {
       return {
         ...state,
@@ -1178,7 +1247,28 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
           : `${player.name} wins with both hands complete!`,
       };
     }
-    return { ...state, message: 'Your hands do not form a winning combination yet.' };
+
+    const rackToLock = checkRackWin(player, activeRack)
+      ? activeRack
+      : (!isRackLocked(player, otherRack) && checkRackWin(player, otherRack) ? otherRack : null);
+
+    if (rackToLock === null) {
+      return { ...state, message: 'Neither rack forms a winning combination yet.' };
+    }
+
+    const updatedPlayer = lockRack(player, rackToLock);
+    const nextIndex = (playerIndex + 1) % state.config.playerCount;
+    return {
+      ...state,
+      players: state.players.map((p, i) => (i === playerIndex ? updatedPlayer : p)),
+      currentPlayerIndex: nextIndex,
+      turnPhase: 'drawing',
+      selectedTileIndex: null,
+      activeRack: getPlayableRack(updatedPlayer, otherRack),
+      message: player.isHuman
+        ? `Rack ${rackToLock} is locked with Mah Jongg. Build the other rack to win both hands.`
+        : `${player.name} locked rack ${rackToLock} with Mah Jongg.`,
+    };
   }
 
   if (checkSimpleWin(player)) {
@@ -1288,6 +1378,8 @@ function siameseAiDiscard(state: GameState, player: Player, skill: number): Game
  * Prefers the rack with fewer tiles; on tie, picks randomly.
  */
 export function siamesePickDrawRack(player: Player): 1 | 2 {
+  if (player.rack1Locked) return 2;
+  if (player.rack2Locked) return 1;
   if (player.hand.length <= player.hand2.length) return 1;
   if (player.hand2.length < player.hand.length) return 2;
   return Math.random() < 0.5 ? 1 : 2;
