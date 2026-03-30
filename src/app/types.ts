@@ -38,6 +38,8 @@ export interface Player {
   exposures: Tile[][];
   hand2: Tile[];        // Second rack (Siamese/2-player only; empty otherwise)
   exposures2: Tile[][];  // Second rack exposures (Siamese/2-player only)
+  rack1Locked: boolean;
+  rack2Locked: boolean;
   isHuman: boolean;
   seatWind: WindDirection;
 }
