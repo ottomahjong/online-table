@@ -545,6 +545,18 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const humanCallOptions: CallOption[] = isCallingPhase ? getCallOptions(game, 0) : [];
   const humanCanCall = humanCallOptions.length > 0;
+  const hasSkippableWait = !!pendingAction && !isPaused && (
+    pendingAction.kind === 'call-window' ||
+    pendingAction.kind === 'human-draw' ||
+    pendingAction.kind === 'ai-turn' ||
+    pendingAction.kind === 'charleston-next-pass' ||
+    pendingAction.kind === 'charleston-start-playing'
+  );
+
+  const handleSkipWait = useCallback(() => {
+    if (isPaused || !pendingActionRef.current) return;
+    executePendingAction(pendingActionRef.current);
+  }, [isPaused, executePendingAction]);
 
   // ─── Charleston Helpers ─────────────────────────────────────────
   const currentCharlestonStepInfo = CHARLESTON_STEPS[charlestonStep] || CHARLESTON_STEPS[0];
@@ -859,6 +871,22 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 />
               ) : (
                 <>
+                  {hasSkippableWait && (
+                    <button
+                      onClick={handleSkipWait}
+                      className="px-3 py-1 rounded-full uppercase tracking-[0.14em] transition-all hover:brightness-110"
+                      style={{
+                        background: 'rgba(255,253,247,0.1)',
+                        color: '#FFFDF7',
+                        fontSize: '0.58rem',
+                        fontWeight: 700,
+                        border: '1px solid rgba(212,165,116,0.35)',
+                      }}
+                    >
+                      {pendingAction?.kind === 'call-window' ? 'Resolve Now' : 'Next Turn'}
+                    </button>
+                  )}
+
                   {/* Blank Trade / Joker Exchange mode banner */}
                   {(blankTradeMode || jokerExchangeMode) && (
                     <div className="flex items-center gap-2 px-4 py-2 rounded-lg" style={{
@@ -2011,19 +2039,21 @@ const OPPONENT_TILE_SCALE = 0.9;
 const MOBILE_TOP_RACK_MASK_HEIGHT = 11;
 const MOBILE_SIDE_RACK_MASK_WIDTH = 10;
 const MOBILE_TOP_RACK_STEP = 30;
-const MOBILE_SIDE_RACK_STEP = 21;
+const MOBILE_SIDE_RACK_STEP = 29;
 const MOBILE_DRAW_TILE_GAP = 8;
+const EXPOSURE_TILE_GAP = 1;
+const EXPOSURE_GROUP_GAP = 8;
 
 function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string>, onJokerClick?: (id: string) => void, tone: 'default' | 'alt' = 'default') {
   if (groups.length === 0) return null;
 
   return (
-    <div className="flex gap-2 flex-wrap justify-center">
+    <div className="flex flex-wrap justify-center" style={{ columnGap: EXPOSURE_GROUP_GAP, rowGap: EXPOSURE_GROUP_GAP }}>
       {groups.map((group, gi) => (
         <div
           key={gi}
-          className="flex gap-[2px] px-1 py-1 rounded-md"
-          style={{ background: tone === 'alt' ? 'rgba(181,112,79,0.08)' : 'rgba(255,253,247,0.08)' }}
+          className="flex px-1 py-1 rounded-md"
+          style={{ background: tone === 'alt' ? 'rgba(181,112,79,0.08)' : 'rgba(255,253,247,0.08)', gap: EXPOSURE_TILE_GAP }}
         >
           {group.map((tile) => {
             const isClickable = clickableJokerIds?.has(tile.id);
@@ -2048,9 +2078,9 @@ function renderExposureColumns(groups: TileType[][], tileRotation: string, click
   if (groups.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-2 items-center shrink-0 py-1">
+    <div className="flex flex-col items-center shrink-0 py-1" style={{ gap: EXPOSURE_GROUP_GAP }}>
       {groups.map((group, gi) => (
-        <div key={gi} className="flex flex-col gap-[2px] items-center px-1 py-1 rounded-md" style={{ background: 'rgba(255,253,247,0.08)' }}>
+        <div key={gi} className="flex flex-col items-center px-1 py-1 rounded-md" style={{ background: 'rgba(255,253,247,0.08)', gap: EXPOSURE_TILE_GAP }}>
           {group.map((tile) => {
             const isClickable = clickableJokerIds?.has(tile.id);
             return (
@@ -2111,8 +2141,9 @@ function MobileSideConcealedRack({
 }) {
   if (tileCount <= 0) return null;
 
+  const tileAngle = side === 'left' ? 90 : -90;
   const totalHeight = 32 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
-  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -(44 * (1 - OPPONENT_TILE_SCALE));
+  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -1;
 
   return (
     <div
@@ -2129,11 +2160,11 @@ function MobileSideConcealedRack({
               style={{
                 top,
                 left: tileLeft,
-                transform: `scale(${OPPONENT_TILE_SCALE})`,
-                transformOrigin: side === 'left' ? 'right center' : 'left center',
+                transform: `rotate(${tileAngle}deg) scale(${OPPONENT_TILE_SCALE})`,
+                transformOrigin: 'center center',
               }}
             >
-              <TileBack size="sm" horizontal />
+              <TileBack size="sm" />
             </div>
           );
         })}
