@@ -39,6 +39,13 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
     onStartGame({ playerCount, jokerCount, flowerCount, totalTiles, botSkillLevel, tipsEnabled });
   };
 
+  const modeSummary = {
+    1: 'Solo practice deals 13 tiles, runs a solo Charleston against the remaining pile, then continues as draw-and-discard practice.',
+    2: 'Two-player uses Siamese rules: no Charleston, 28/27 tile deal, two racks per player, and both racks must eventually Mah Jongg to win.',
+    3: 'Three-player uses the official NMJL flow here: no Charleston, no courtesy pass, East discards to begin play.',
+    4: 'Four-player uses the standard Charleston and full table flow.',
+  }[playerCount];
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F5F0E6', fontFamily: "'Jost', sans-serif" }}>
       {/* Header */}
@@ -96,6 +103,9 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
               onChange={(v) => setPlayerCount(v as 1 | 2 | 3 | 4)}
               labels={['Solo', '2 Players', '3 Players', '4 Players']}
             />
+            <p className="mt-1.5" style={{ color: '#8B9D83', fontSize: '0.7rem', lineHeight: 1.4 }}>
+              {modeSummary}
+            </p>
           </SettingRow>
 
           {/* Total Tiles */}
