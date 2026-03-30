@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg } from '../gameLogic';
+import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, claimMahJonggOnDiscard } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
@@ -130,6 +130,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => {
       if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
       if (prev.lastDiscardedBy === null) return passTurn(prev);
+      for (let offset = 1; offset < prev.config.playerCount; offset++) {
+        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
+        if (canClaimMahJonggOnDiscard(prev, i)) {
+          return claimMahJonggOnDiscard(prev, i);
+        }
+      }
       for (let offset = 1; offset < prev.config.playerCount; offset++) {
         const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
         if (prev.players[i].isHuman) continue;
@@ -431,6 +437,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => callTile(prev, 0, groupSize));
   }, [isPaused, clearPendingAction]);
 
+  const handleClaimMahJongg = useCallback(() => {
+    if (isPaused) return;
+    clearPendingAction();
+    setGame(prev => claimMahJonggOnDiscard(prev, 0));
+  }, [isPaused, clearPendingAction]);
+
   // Handle ignoring a discarded tile
   const handleIgnore = useCallback(() => {
     if (isPaused) return;
@@ -545,6 +557,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const humanCallOptions: CallOption[] = isCallingPhase ? getCallOptions(game, 0) : [];
   const humanCanCall = humanCallOptions.length > 0;
+  const humanCanClaimDiscardMahJongg = isCallingPhase ? canClaimMahJonggOnDiscard(game, 0) : false;
   const hasSkippableWait = !!pendingAction && !isPaused && (
     pendingAction.kind === 'call-window' ||
     pendingAction.kind === 'human-draw' ||
@@ -975,6 +988,22 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           }}>{callCountdown ?? 0}</span>
                         </div>
                         <div className="flex flex-col gap-1.5">
+                          {humanCanClaimDiscardMahJongg && (
+                            <button
+                              onClick={handleClaimMahJongg}
+                              className="px-4 py-2 rounded transition-all uppercase tracking-wider hover:brightness-110"
+                              style={{
+                                background: '#2D6A4F',
+                                color: '#FFFDF7',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                boxShadow: '0 2px 8px rgba(45,106,79,0.45)',
+                                lineHeight: 1.1,
+                              }}
+                            >
+                              Mah Jongg!
+                            </button>
+                          )}
                           {humanCanCall && (
                             <div className="flex flex-col gap-1 items-center">
                               <span style={{
