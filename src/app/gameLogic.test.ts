@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { canClaimMahJonggOnDiscard, checkSimpleWin, claimMahJonggOnDiscard, getCallOptions } from './gameLogic';
+import { canClaimMahJonggOnDiscard, checkSimpleWin, claimMahJonggOnDiscard, createGame, declareMahJongg, getCallOptions } from './gameLogic';
 import type { GameState, Player, Tile, Suit } from './types';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +47,8 @@ function makePlayer(hand: Tile[], exposures: Tile[][] = []): Player {
     exposures,
     hand2: [],
     exposures2: [],
+    rack1Locked: false,
+    rack2Locked: false,
   };
 }
 
@@ -401,6 +403,62 @@ describe('discard claim rules', () => {
 
     expect(getCallOptions(state, 0)).toEqual([]);
     expect(canClaimMahJonggOnDiscard(state, 0)).toBe(false);
+  });
+});
+
+describe('mode-specific setup rules', () => {
+  it('starts solo mode with 13 tiles and a Charleston phase', () => {
+    const state = createGame({
+      playerCount: 1,
+      jokerCount: 8,
+      flowerCount: 8,
+      totalTiles: 152,
+      botSkillLevel: 3,
+      tipsEnabled: true,
+    });
+
+    expect(state.players[0].hand).toHaveLength(13);
+    expect(state.phase).toBe('charleston');
+  });
+
+  it('locks one Siamese rack without ending the game when only one rack is complete', () => {
+    const rack1: Tile[] = [
+      flower(), flower(), flower(),
+      suited('bam', 1), suited('bam', 3), suited('bam', 5),
+      suited('bam', 7), suited('bam', 7), suited('bam', 7), suited('bam', 7),
+      suited('bam', 9), suited('bam', 9), suited('bam', 9), suited('bam', 9),
+    ];
+    const rack2: Tile[] = [
+      suited('crak', 1), suited('crak', 2), suited('crak', 3),
+      suited('crak', 4), suited('crak', 5), suited('crak', 6),
+      suited('dot', 1), suited('dot', 2), suited('dot', 3),
+      wind('east'), wind('south'), dragon('red'), joker(),
+    ];
+
+    const state = makeState({
+      config: {
+        playerCount: 2,
+        jokerCount: 8,
+        flowerCount: 8,
+        totalTiles: 152,
+        botSkillLevel: 3,
+        tipsEnabled: true,
+      },
+      players: [
+        { ...makePlayer(rack1), hand2: rack2, seatWind: 'east' },
+        { ...makePlayer([]), id: 1, name: 'Player 2', isHuman: false, seatWind: 'south' },
+      ],
+      currentPlayerIndex: 0,
+      turnPhase: 'discarding',
+      activeRack: 1,
+      lastDiscardedBy: null,
+    });
+
+    const resolved = declareMahJongg(state, 0);
+    expect(resolved.phase).toBe('playing');
+    expect(resolved.players[0].rack1Locked).toBe(true);
+    expect(resolved.players[0].rack2Locked).toBe(false);
+    expect(resolved.currentPlayerIndex).toBe(1);
   });
 });
 
