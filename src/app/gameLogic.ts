@@ -574,6 +574,23 @@ interface NMJLConcretePattern {
   concealed: boolean;
 }
 
+export interface WinningHandMatch {
+  groups: Tile[][];
+  pattern: string;
+  colorPattern: string;
+  concealed: boolean;
+}
+
+interface PatternGroupSpec {
+  tokenText: string;
+  tokenColor: string;
+  tileNeeds: Map<string, number>;
+  jokerEligible: boolean;
+  size: number;
+  isNeutralDragon: boolean;
+  neutralDragonCount: number;
+}
+
 /**
  * Check if a token represents a group where jokers may substitute.
  * NMJL rule: jokers can only be used in pungs (3), kongs (4), quints (5),
@@ -863,6 +880,169 @@ function matchesPattern(
     }
   }
   return false;
+}
+
+function buildPatternGroups(pattern: NMJLConcretePattern, suitMap: Record<string, Suit>, dragonType: string | null): PatternGroupSpec[] | null {
+  const groups: PatternGroupSpec[] = [];
+
+  for (const tok of pattern.tokens) {
+    if (tok.c === 'o') continue;
+
+    const text = tok.t;
+    const color = tok.c;
+    const jokerEligible = isJokerEligibleToken(text) && !/^F+$/.test(text) && !/^[NEWS]+$/.test(text);
+    const tileNeeds = new Map<string, number>();
+
+    if (/^F+$/.test(text)) {
+      tileNeeds.set('flower', text.length);
+      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
+      continue;
+    }
+
+    if (/^[NEWS]+$/.test(text)) {
+      const wm: Record<string, string> = { N: 'north', E: 'east', W: 'west', S: 'south' };
+      for (const ch of text) {
+        const k = `w_${wm[ch]}`;
+        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
+      }
+      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
+      continue;
+    }
+
+    if (/^D+$/.test(text)) {
+      if (color === 'n') {
+        if (!dragonType) return null;
+        tileNeeds.set(`d_${dragonType}`, text.length);
+        groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: true, neutralDragonCount: text.length });
+        continue;
+      }
+
+      const s = suitMap[color];
+      if (!s) return null;
+      tileNeeds.set(`d_${suitDragon(s)}`, text.length);
+      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
+      continue;
+    }
+
+    const suit = suitMap[color];
+    if (!suit) return null;
+    for (const ch of text) {
+      const digit = parseInt(ch);
+      if (digit === 0) {
+        const k = `d_${suitDragon(suit)}`;
+        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
+      } else if (digit >= 1 && digit <= 9) {
+        const k = `s_${suit}_${digit}`;
+        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
+      }
+    }
+    groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
+  }
+
+  const totalSize = groups.reduce((sum, group) => sum + group.size, 0);
+  return totalSize === 14 ? groups : null;
+}
+
+function cloneTilePools(tilePools: Map<string, Tile[]>): Map<string, Tile[]> {
+  return new Map(Array.from(tilePools.entries(), ([key, tiles]) => [key, [...tiles]]));
+}
+
+function assignPatternGroups(
+  groups: PatternGroupSpec[],
+  tilePools: Map<string, Tile[]>,
+  jokers: Tile[],
+  index = 0
+): Tile[][] | null {
+  if (index >= groups.length) return [];
+
+  const group = groups[index];
+  const needEntries = Array.from(group.tileNeeds.entries());
+
+  if (!group.jokerEligible) {
+    const nextPools = cloneTilePools(tilePools);
+    const tilesForGroup: Tile[] = [];
+
+    for (const [key, needed] of needEntries) {
+      const available = nextPools.get(key) || [];
+      if (available.length < needed) return null;
+      tilesForGroup.push(...available.slice(0, needed));
+      nextPools.set(key, available.slice(needed));
+    }
+
+    const rest = assignPatternGroups(groups, nextPools, jokers, index + 1);
+    return rest ? [tilesForGroup, ...rest] : null;
+  }
+
+  if (needEntries.length !== 1) return null;
+
+  const [key, needed] = needEntries[0];
+  const available = tilePools.get(key) || [];
+  const maxReal = Math.min(needed, available.length);
+  const minReal = Math.max(0, needed - jokers.length);
+
+  for (let realCount = maxReal; realCount >= minReal; realCount--) {
+    const jokerCountNeeded = needed - realCount;
+    const nextPools = cloneTilePools(tilePools);
+    const tilesForGroup: Tile[] = [
+      ...available.slice(0, realCount),
+      ...jokers.slice(0, jokerCountNeeded),
+    ];
+    nextPools.set(key, available.slice(realCount));
+
+    const rest = assignPatternGroups(groups, nextPools, jokers.slice(jokerCountNeeded), index + 1);
+    if (rest) return [tilesForGroup, ...rest];
+  }
+
+  return null;
+}
+
+export function findWinningHandMatch(player: Player, rack: 1 | 2 = 1): WinningHandMatch | null {
+  const concealedTiles = rack === 2 ? player.hand2 : player.hand;
+  const exposedTiles = rack === 2 ? player.exposures2.flat() : player.exposures.flat();
+  const allTiles = [...concealedTiles, ...exposedTiles];
+  const hasExposures = (rack === 2 ? player.exposures2 : player.exposures).length > 0;
+  if (allTiles.length !== 14) return null;
+
+  const tilePools = new Map<string, Tile[]>();
+  const jokers: Tile[] = [];
+
+  for (const tile of allTiles) {
+    if (tile.type === 'special' && tile.specialType === 'joker') {
+      jokers.push(tile);
+      continue;
+    }
+    const key = nmjlTileKey(tile);
+    const list = tilePools.get(key) || [];
+    list.push(tile);
+    tilePools.set(key, list);
+  }
+
+  for (const pattern of ALL_NMJL_PATTERNS) {
+    if (pattern.concealed && hasExposures) continue;
+
+    for (const [gSuit, rSuit, bSuit] of SUIT_PERMS) {
+      const suitMap: Record<string, Suit> = { g: gSuit, r: rSuit, b: bSuit };
+      const hasNeutralDragons = pattern.tokens.some(tok => tok.c !== 'o' && /^D+$/.test(tok.t) && tok.c === 'n');
+      const dragonOptions: (string | null)[] = hasNeutralDragons ? ['red', 'green', 'soap'] : [null];
+
+      for (const dragonType of dragonOptions) {
+        const groups = buildPatternGroups(pattern, suitMap, dragonType);
+        if (!groups) continue;
+
+        const assignedGroups = assignPatternGroups(groups, tilePools, jokers);
+        if (!assignedGroups) continue;
+
+        return {
+          groups: assignedGroups,
+          pattern: groups.map(group => group.tokenText).join(' '),
+          colorPattern: groups.map(group => `${group.tokenText}:${group.tokenColor}`).join(' '),
+          concealed: pattern.concealed,
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 function buildTileCounts(tiles: Tile[]): { counts: Map<string, number>; jokerCount: number } {
