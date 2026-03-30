@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { Player, Tile as TileType, tilesMatch } from '../types';
+import { Player, Tile as TileType } from '../types';
 import { TileComponent } from './Tile';
 import { PlanHand, PatternDisplayCompact } from './NMJLCard';
+import { findWinningHandMatch } from '../gameLogic';
 
 interface ConfettiParticle {
   id: number;
@@ -137,83 +138,22 @@ const DRAW_QUIPS = [
   'The tiles keep their secrets.',
 ];
 
-// ─── Hand Grouping Logic ────────────────────────────────────────────
-
-/**
- * Groups the concealed hand tiles into logical sets for display.
- * Identical non-joker tiles are grouped together,
- * then leftover jokers fill the smallest groups first.
- */
-function groupHandTiles(hand: TileType[]): TileType[][] {
-  if (hand.length === 0) return [];
-
-  const used = new Set<number>();
-  const groups: TileType[][] = [];
-
-  // Group identical non-joker tiles
-  for (let i = 0; i < hand.length; i++) {
-    if (used.has(i)) continue;
-    const tile = hand[i];
-    if (tile.type === 'special' && tile.specialType === 'joker') continue;
-
-    const group: TileType[] = [tile];
-    used.add(i);
-
-    for (let j = i + 1; j < hand.length; j++) {
-      if (used.has(j)) continue;
-      if (hand[j].type === 'special' && hand[j].specialType === 'joker') continue;
-      if (tilesMatch(tile, hand[j])) {
-        group.push(hand[j]);
-        used.add(j);
-      }
-    }
-    groups.push(group);
-  }
-
-  // Collect leftover jokers
-  const jokers: TileType[] = [];
-  for (let i = 0; i < hand.length; i++) {
-    if (!used.has(i) && hand[i].type === 'special' && hand[i].specialType === 'joker') {
-      jokers.push(hand[i]);
-      used.add(i);
-    }
-  }
-
-  // Attach jokers to the smallest groups first
-  groups.sort((a, b) => a.length - b.length);
-  let ji = 0;
-  for (const group of groups) {
-    while (ji < jokers.length && group.length < 3) {
-      group.push(jokers[ji++]);
-    }
-  }
-
-  // Remaining jokers become their own group
-  if (ji < jokers.length) {
-    groups.push(jokers.slice(ji));
-  }
-
-  // Pairs last, larger groups first
-  groups.sort((a, b) => {
-    if (a.length === 2 && b.length !== 2) return 1;
-    if (b.length === 2 && a.length !== 2) return -1;
-    return b.length - a.length;
-  });
-
-  return groups;
-}
-
 // ─── Winning Hand Display ───────────────────────────────────────────
 
 function WinningHandDisplay({ player, humanWon, planHand, isSiamese }: { player: Player; humanWon: boolean; planHand?: PlanHand | null; isSiamese?: boolean }) {
-  const concealedGroups1 = groupHandTiles(player.hand);
-  const allGroups1 = [...player.exposures, ...concealedGroups1];
+  const winningMatch1 = findWinningHandMatch(player, 1);
+  const allGroups1 = winningMatch1?.groups ?? [...player.exposures, player.hand];
   const totalTiles1 = allGroups1.reduce((s, g) => s + g.length, 0);
 
   const hasRack2 = isSiamese && (player.hand2.length > 0 || player.exposures2.length > 0);
-  const concealedGroups2 = hasRack2 ? groupHandTiles(player.hand2) : [];
-  const allGroups2 = hasRack2 ? [...player.exposures2, ...concealedGroups2] : [];
+  const winningMatch2 = hasRack2 ? findWinningHandMatch(player, 2) : null;
+  const allGroups2 = hasRack2 ? (winningMatch2?.groups ?? [...player.exposures2, player.hand2]) : [];
   const totalTiles2 = allGroups2.reduce((s, g) => s + g.length, 0);
+  const planMatchesWinningHand = !!planHand && !!winningMatch1 && (
+    planHand.colorPattern.split(' | ').includes(winningMatch1.colorPattern)
+    || planHand.pattern.split(' -or- ').includes(winningMatch1.pattern)
+  );
+  const displayPlan = planMatchesWinningHand ? planHand : null;
 
   const renderRack = (groups: TileType[][], totalTiles: number, rackLabel?: string) => (
     <div>
@@ -260,7 +200,7 @@ function WinningHandDisplay({ player, humanWon, planHand, isSiamese }: { player:
   return (
     <div>
       {/* NMJL hand pattern being completed */}
-      {planHand && (
+      {(displayPlan || winningMatch1) && (
         <div
           className="flex flex-col items-center gap-1 mb-3 px-3 py-2 rounded-lg mx-auto"
           style={{
@@ -278,10 +218,15 @@ function WinningHandDisplay({ player, humanWon, planHand, isSiamese }: { player:
               fontWeight: 600,
             }}
           >
-            {planHand.category} &middot; {planHand.value}pt{planHand.concealed ? ' \u00b7 Concealed' : ''}
+            {displayPlan
+              ? `${displayPlan.category} \u00b7 ${displayPlan.value}pt${displayPlan.concealed ? ' \u00b7 Concealed' : ''}`
+              : `${winningMatch1?.concealed ? 'Concealed' : 'Exposed'} Winning Hand`}
           </span>
           <div className="flex justify-center">
-            <PatternDisplayCompact pattern={planHand.pattern} colorPattern={planHand.colorPattern} />
+            <PatternDisplayCompact
+              pattern={displayPlan?.pattern ?? winningMatch1?.pattern ?? ''}
+              colorPattern={displayPlan?.colorPattern ?? winningMatch1?.colorPattern}
+            />
           </div>
         </div>
       )}
