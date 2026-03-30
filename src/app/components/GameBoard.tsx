@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, claimMahJonggOnDiscard } from '../gameLogic';
+import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, claimMahJonggOnDiscard } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
@@ -73,6 +73,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const callWindowSeconds = DISCARD_CALL_WINDOW_SECONDS;
   const siamese = config.playerCount === 2;
   const activeRack = game.activeRack ?? 1;
+  const rack1Locked = siamese && isRackLocked(humanPlayer, 1);
+  const rack2Locked = siamese && isRackLocked(humanPlayer, 2);
 
   // Joker Exchange tip: detect if valid exchanges exist during human's discarding turn
   const isHumanDiscarding = game.phase === 'playing' && game.currentPlayerIndex === 0 && game.turnPhase === 'discarding';
@@ -353,6 +355,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     // Check if the clicked tile is a blank during playing phase
     if (game.phase === 'playing') {
       const activeHand = siamese ? (activeRack === 2 ? humanPlayer.hand2 : humanPlayer.hand) : humanPlayer.hand;
+      if (siamese && isRackLocked(humanPlayer, activeRack)) {
+        return;
+      }
       const tile = activeHand[index];
       if (tile && tile.type === 'special' && tile.specialType === 'blank') {
         if (game.discardPool.length > 0) {
@@ -532,14 +537,16 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   // Siamese: switch active rack
   const handleSwitchRack = useCallback((rack: 1 | 2) => {
     if (isPaused) return;
+    if (isRackLocked(game.players[0], rack)) return;
     setGame(prev => ({ ...prev, activeRack: rack, selectedTileIndex: null }));
-  }, [isPaused]);
+  }, [isPaused, game.players]);
 
   // Siamese: move a tile from one rack to another
   const handleMoveTileToOtherRack = useCallback((tileIndex: number, fromRack: 1 | 2) => {
     if (isPaused) return;
+    if (isRackLocked(game.players[0], fromRack) || isRackLocked(game.players[0], fromRack === 1 ? 2 : 1)) return;
     setGame(prev => swapTileBetweenRacks(prev, 0, fromRack, tileIndex));
-  }, [isPaused]);
+  }, [isPaused, game.players]);
 
   // Declare Mah Jongg
   const handleDeclareMahJongg = useCallback(() => {
@@ -599,23 +606,25 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => ({
       ...prev,
       phase: 'playing',
-      turnPhase: 'discarding',
-      message: 'East discards first — select a tile to discard',
+      turnPhase: config.playerCount === 1 ? 'drawing' : 'discarding',
+      message: config.playerCount === 1
+        ? 'Solo practice — draw a tile and continue building your hand'
+        : 'East discards first — select a tile to discard',
     }));
-  }, []);
+  }, [config.playerCount]);
 
   // Helper: transition to courtesy pass or directly to play
   const goToCourtesyOrPlay = useCallback(() => {
     const oppositeIndex = getPassTarget(0, 'across', config.playerCount);
-    if (oppositeIndex < 0) {
-      // No opposite player (1-player) — skip courtesy, start game
-      startPlaying();
-      return;
-    }
     setCharlestonSelected([]);
     setCharlestonReceivedCount(0);
     setCharlestonSubPhase('courtesy');
-    setGame(prev => ({ ...prev, message: 'Courtesy Pass — optionally exchange 0–3 tiles with player across' }));
+    setGame(prev => ({
+      ...prev,
+      message: oppositeIndex < 0
+        ? 'Courtesy Pass — optionally exchange 0–3 tiles with the remaining pile'
+        : 'Courtesy Pass — optionally exchange 0–3 tiles with player across',
+    }));
   }, [config.playerCount, startPlaying]);
 
   const handleCharlestonPass = useCallback(() => {
@@ -670,7 +679,27 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       return;
     }
     const oppositeIndex = getPassTarget(0, 'across', config.playerCount);
-    if (oppositeIndex < 0) { startPlaying(); return; }
+    if (oppositeIndex < 0) {
+      setGame(prev => {
+        const result = executeCharlestonPass(
+          prev.players,
+          0,
+          oppositeIndex,
+          charlestonSelected,
+          'across',
+          config.playerCount,
+          prev.wall
+        );
+        return {
+          ...prev,
+          players: result.players,
+          wall: result.wall ?? prev.wall,
+        };
+      });
+      setCharlestonSelected([]);
+      schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
+      return;
+    }
 
     setGame(prev => {
       const newPlayers = prev.players.map(p => ({ ...p, hand: [...p.hand] }));
@@ -1244,29 +1273,38 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               {([1, 2] as const).map((rackNum) => {
                 const rackHand = rackNum === 1 ? humanPlayer.hand : humanPlayer.hand2;
                 const rackExposures = rackNum === 1 ? humanPlayer.exposures : humanPlayer.exposures2;
+                const rackLocked = rackNum === 1 ? rack1Locked : rack2Locked;
                 const isActive = activeRack === rackNum;
                 const rackLabel = rackNum === 1 ? 'Rack 1' : 'Rack 2';
                 return (
                   <div key={rackNum}
                     className="relative transition-all"
                     style={{
-                      background: isActive ? '#FFFDF7' : '#F5F0E6',
-                      borderTop: isActive ? '2px solid #B5704F' : '1px solid rgba(27,42,74,0.06)',
-                      cursor: isActive ? 'default' : 'pointer',
+                      background: rackLocked ? '#EDF4EE' : isActive ? '#FFFDF7' : '#F5F0E6',
+                      borderTop: rackLocked ? '2px solid #2D6A4F' : isActive ? '2px solid #B5704F' : '1px solid rgba(27,42,74,0.06)',
+                      cursor: rackLocked || isActive ? 'default' : 'pointer',
                     }}
-                    onClick={!isActive ? () => handleSwitchRack(rackNum) : undefined}
+                    onClick={!rackLocked && !isActive ? () => handleSwitchRack(rackNum) : undefined}
                   >
                     {/* Rack label */}
                     <div className="flex items-center gap-2 px-3 py-0.5">
                       <span className="text-[0.5rem] uppercase tracking-[0.12em]" style={{
-                        color: isActive ? '#B5704F' : '#8B9D83',
+                        color: rackLocked ? '#2D6A4F' : isActive ? '#B5704F' : '#8B9D83',
                         fontWeight: 700,
                       }}>
                         {rackLabel}
                       </span>
+                      {rackLocked && (
+                        <span className="text-[0.45rem] px-1.5 py-0.5 rounded" style={{
+                          background: 'rgba(45,106,79,0.12)',
+                          color: '#2D6A4F',
+                        }}>
+                          Mah Jongg locked
+                        </span>
+                      )}
                       <span className="text-[0.45rem] px-1.5 py-0.5 rounded" style={{
-                        background: isActive ? 'rgba(181,112,79,0.1)' : 'rgba(139,157,131,0.1)',
-                        color: isActive ? '#B5704F' : '#8B9D83',
+                        background: rackLocked ? 'rgba(45,106,79,0.08)' : isActive ? 'rgba(181,112,79,0.1)' : 'rgba(139,157,131,0.1)',
+                        color: rackLocked ? '#2D6A4F' : isActive ? '#B5704F' : '#8B9D83',
                       }}>
                         {rackHand.length} tiles
                       </span>
@@ -1278,7 +1316,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           {rackExposures.length} exp
                         </span>
                       )}
-                      {!isActive && (
+                      {!rackLocked && !isActive && (
                         <span className="text-[0.45rem] ml-auto" style={{ color: '#8B9D83' }}>
                           Click to switch
                         </span>
@@ -1286,12 +1324,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                     </div>
                     {/* Tiles */}
                     <div className="flex items-end justify-center gap-0.5 px-2 py-1 overflow-x-auto" style={{
-                      opacity: isActive ? 1 : 0.6,
-                      filter: isActive ? 'none' : 'grayscale(0.3)',
+                      opacity: rackLocked ? 0.9 : isActive ? 1 : 0.6,
+                      filter: rackLocked ? 'none' : isActive ? 'none' : 'grayscale(0.3)',
                       minHeight: isActive ? 'auto' : 40,
                     }}>
                       {rackHand.map((tile, index) => {
-                        if (isActive) {
+                        if (isActive && !rackLocked) {
                           return (
                             <DraggableHandTile
                               key={tile.id}
@@ -1326,9 +1364,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         // Inactive rack: smaller tiles, click to move
                         return (
                           <div key={tile.id}
-                            className="cursor-pointer transition-transform hover:scale-105"
-                            onClick={(e) => { e.stopPropagation(); handleMoveTileToOtherRack(index, rackNum); }}
-                            title={`Move to ${rackNum === 1 ? 'Rack 2' : 'Rack 1'}`}
+                            className={rackLocked ? '' : 'cursor-pointer transition-transform hover:scale-105'}
+                            onClick={rackLocked ? undefined : (e) => { e.stopPropagation(); handleMoveTileToOtherRack(index, rackNum); }}
+                            title={rackLocked ? undefined : `Move to ${rackNum === 1 ? 'Rack 2' : 'Rack 1'}`}
                           >
                             <TileComponent tile={tile} size="sm" />
                           </div>
@@ -1602,15 +1640,29 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Dealing</p>
-                <p>East receives <strong style={{ color: '#1B2A4A' }}>14 tiles</strong>, all other players 13. East discards first without drawing.</p>
+                <p>
+                  {config.playerCount === 1
+                    ? <>Solo practice starts with <strong style={{ color: '#1B2A4A' }}>13 tiles</strong>, then uses Charleston-style redraws before normal draw-and-discard play.</>
+                    : config.playerCount === 2
+                      ? <>Siamese deals <strong style={{ color: '#1B2A4A' }}>28 tiles to East</strong> and <strong style={{ color: '#1B2A4A' }}>27 to the opponent</strong>. There is no Charleston.</>
+                      : <>East receives <strong style={{ color: '#1B2A4A' }}>14 tiles</strong>, all other players 13. East discards first without drawing.</>}
+                </p>
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Charleston</p>
-                <p><strong style={{ color: '#1B2A4A' }}>1st Charleston</strong> (compulsory): Pass 3 tiles Right → Across → Left.</p>
-                <p><strong style={{ color: '#1B2A4A' }}>2nd Charleston</strong> (optional): Left → Across → Right.</p>
-                <p><strong style={{ color: '#1B2A4A' }}>Courtesy Pass</strong> (optional): Exchange 0–3 tiles with player across after Charleston.</p>
-                <p style={{ color: '#C4453E' }}>Jokers may <strong>never</strong> be passed during Charleston.</p>
+                {config.playerCount === 2 ? (
+                  <p>Siamese skips the Charleston entirely so play starts immediately after the 28/27 tile deal.</p>
+                ) : config.playerCount === 3 ? (
+                  <p>This 3-player mode follows the official NMJL shortcut: no Charleston and no courtesy pass.</p>
+                ) : (
+                  <>
+                    <p><strong style={{ color: '#1B2A4A' }}>1st Charleston</strong> (compulsory): Pass 3 tiles Right → Across → Left.</p>
+                    <p><strong style={{ color: '#1B2A4A' }}>2nd Charleston</strong> (optional): Left → Across → Right.</p>
+                    <p><strong style={{ color: '#1B2A4A' }}>Courtesy Pass</strong> (optional): Exchange 0–3 tiles with player across after Charleston.</p>
+                    <p style={{ color: '#C4453E' }}>Jokers may <strong>never</strong> be passed during Charleston.</p>
+                  </>
+                )}
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
@@ -1643,6 +1695,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Winning</p>
                 <p>Declare <strong style={{ color: '#1B2A4A' }}>Mah Jongg</strong> when your hand matches a pattern on the NMJL card. Any tile except a Joker may be called for Mah Jongg.</p>
+                {config.playerCount === 2 && (
+                  <p>In Siamese, you can lock a completed rack with Mah Jongg and keep playing the other rack. You win the game once both racks are complete.</p>
+                )}
                 <p>Click <BookOpen size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> in the top bar to view the NMJL reference card and plan hands.</p>
               </div>
             </div>
