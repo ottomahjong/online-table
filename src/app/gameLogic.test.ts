@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { checkSimpleWin } from './gameLogic';
-import type { Player, Tile, Suit } from './types';
+import { canClaimMahJonggOnDiscard, checkSimpleWin, claimMahJonggOnDiscard, getCallOptions } from './gameLogic';
+import type { GameState, Player, Tile, Suit } from './types';
 
 // ---------------------------------------------------------------------------
 // Tile-builder helpers
@@ -47,6 +47,37 @@ function makePlayer(hand: Tile[], exposures: Tile[][] = []): Player {
     exposures,
     hand2: [],
     exposures2: [],
+  };
+}
+
+function makeState(overrides: Partial<GameState> = {}): GameState {
+  return {
+    config: {
+      playerCount: 4,
+      jokerCount: 8,
+      flowerCount: 8,
+      totalTiles: 152,
+      botSkillLevel: 3,
+      tipsEnabled: true,
+    },
+    players: [
+      makePlayer([]),
+      { ...makePlayer([]), id: 1, name: 'Player 2', isHuman: false, seatWind: 'south' },
+      { ...makePlayer([]), id: 2, name: 'Player 3', isHuman: false, seatWind: 'west' },
+      { ...makePlayer([]), id: 3, name: 'Player 4', isHuman: false, seatWind: 'north' },
+    ],
+    wall: [],
+    discardPool: [],
+    currentPlayerIndex: 1,
+    phase: 'playing',
+    turnPhase: 'calling',
+    lastDiscarded: null,
+    lastDiscardedBy: 1,
+    message: '',
+    winner: null,
+    selectedTileIndex: null,
+    activeRack: 1,
+    ...overrides,
   };
 }
 
@@ -316,6 +347,60 @@ describe('2025 card clarifications', () => {
       dragon('green'), dragon('green'), dragon('green'), dragon('green'),
     ];
     expect(checkSimpleWin(makePlayer(hand))).toBe(true);
+  });
+});
+
+describe('discard claim rules', () => {
+  it('allows claiming Mah Jongg on a discard for a concealed singles-and-pairs hand', () => {
+    const playerHand: Tile[] = [
+      flower(), flower(),
+      suited('bam', 2), dragon('green'), suited('bam', 2),
+      suited('bam', 5),
+      suited('crak', 2), dragon('red'), suited('crak', 2),
+      suited('crak', 5),
+      suited('dot', 2), dragon('soap'), suited('dot', 2),
+    ];
+    const winningDiscard = suited('dot', 5);
+
+    const state = makeState({
+      players: [
+        makePlayer(playerHand),
+        { ...makePlayer([]), id: 1, name: 'Player 2', isHuman: false, seatWind: 'south' },
+        { ...makePlayer([]), id: 2, name: 'Player 3', isHuman: false, seatWind: 'west' },
+        { ...makePlayer([]), id: 3, name: 'Player 4', isHuman: false, seatWind: 'north' },
+      ],
+      discardPool: [winningDiscard],
+      lastDiscarded: winningDiscard,
+      lastDiscardedBy: 1,
+    });
+
+    expect(getCallOptions(state, 0)).toEqual([]);
+    expect(canClaimMahJonggOnDiscard(state, 0)).toBe(true);
+
+    const resolved = claimMahJonggOnDiscard(state, 0);
+    expect(resolved.phase).toBe('gameOver');
+    expect(resolved.winner).toBe(0);
+    expect(resolved.discardPool).toHaveLength(0);
+    expect(resolved.players[0].hand).toHaveLength(14);
+    expect(checkSimpleWin(resolved.players[0])).toBe(true);
+  });
+
+  it('never allows calling a discarded joker', () => {
+    const discardedJoker = joker();
+    const state = makeState({
+      players: [
+        makePlayer([joker(), joker(), joker()]),
+        { ...makePlayer([]), id: 1, name: 'Player 2', isHuman: false, seatWind: 'south' },
+        { ...makePlayer([]), id: 2, name: 'Player 3', isHuman: false, seatWind: 'west' },
+        { ...makePlayer([]), id: 3, name: 'Player 4', isHuman: false, seatWind: 'north' },
+      ],
+      discardPool: [discardedJoker],
+      lastDiscarded: discardedJoker,
+      lastDiscardedBy: 1,
+    });
+
+    expect(getCallOptions(state, 0)).toEqual([]);
+    expect(canClaimMahJonggOnDiscard(state, 0)).toBe(false);
   });
 });
 
