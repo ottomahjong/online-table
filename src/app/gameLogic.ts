@@ -569,7 +569,7 @@ export function sortHandRack(state: GameState, playerIndex: number, type: 'suit'
 // Colors g/r/b represent suit groups (actual suits determined by permutation).
 // Jokers are wildcards that can substitute for any tile in any group.
 
-interface NMJLConcretePattern {
+export interface NMJLConcretePattern {
   tokens: { t: string; c: string }[];
   concealed: boolean;
 }
@@ -580,7 +580,7 @@ interface NMJLConcretePattern {
  * and sextets (6) — groups of 3+ IDENTICAL tiles.
  * Jokers may NOT be used in singles, pairs, or runs/sequences.
  */
-function isJokerEligibleToken(text: string): boolean {
+export function isJokerEligibleToken(text: string): boolean {
   if (text.length < 3) return false;
   const first = text[0];
   for (let i = 1; i < text.length; i++) {
@@ -589,7 +589,7 @@ function isJokerEligibleToken(text: string): boolean {
   return true;
 }
 
-function parseTokenStr(s: string): { t: string; c: string }[] {
+export function parseTokenStr(s: string): { t: string; c: string }[] {
   return s.split(' ').map(part => {
     const idx = part.lastIndexOf(':');
     return { t: part.slice(0, idx), c: part.slice(idx + 1) };
@@ -607,7 +607,7 @@ function shiftTokenStr(tokenStr: string, delta: number): string {
   }).join(' ');
 }
 
-const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = (() => {
+export const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = (() => {
   const patterns: NMJLConcretePattern[] = [];
   function add(concealed: boolean, ...tokenStrs: string[]) {
     for (const ts of tokenStrs) {
@@ -692,7 +692,7 @@ const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = (() => {
   return patterns;
 })();
 
-function nmjlTileKey(tile: Tile): string {
+export function nmjlTileKey(tile: Tile): string {
   switch (tile.type) {
     case 'suited': return `s_${tile.suit}_${tile.value}`;
     case 'wind': return `w_${tile.direction}`;
@@ -704,11 +704,11 @@ function nmjlTileKey(tile: Tile): string {
   }
 }
 
-function suitDragon(suit: Suit): string {
+export function suitDragon(suit: Suit): string {
   switch (suit) { case 'bam': return 'green'; case 'crak': return 'red'; case 'dot': return 'soap'; }
 }
 
-const SUIT_PERMS: [Suit, Suit, Suit][] = [
+export const SUIT_PERMS: [Suit, Suit, Suit][] = [
   ['bam','crak','dot'],['bam','dot','crak'],['crak','bam','dot'],
   ['crak','dot','bam'],['dot','bam','crak'],['dot','crak','bam'],
 ];

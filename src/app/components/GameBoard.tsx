@@ -5,6 +5,7 @@ import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
+import { AnalyzePanel } from './AnalyzePanel';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, ArrowDown, Lightbulb, ArrowUpDown } from 'lucide-react';
@@ -32,6 +33,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [game, setGame] = useState<GameState>(() => createGame(config));
   const [showHelp, setShowHelp] = useState(false);
   const [showNMJL, setShowNMJL] = useState(false);
+  const [showAnalyze, setShowAnalyze] = useState(false);
+  const [analyzeHoverId, setAnalyzeHoverId] = useState<string | null>(null);
   const [callCountdown, setCallCountdown] = useState<number | null>(null);
   const [planHands, setPlanHands] = useState<(PlanHand | null)[]>([null, null, null]);
   const [playerBarHeight, setPlayerBarHeight] = useState(0);
@@ -990,6 +993,20 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               >
                 Sort Suit
               </button>
+              <button
+                onClick={() => setShowAnalyze((v) => !v)}
+                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110 flex items-center gap-1"
+                style={{
+                  background: showAnalyze ? '#1B2A4A' : '#B5704F',
+                  color: '#FFFDF7',
+                  fontWeight: 600,
+                  border: showAnalyze ? '2px solid #D4A574' : 'none',
+                }}
+                title="Strategy analysis for this hand"
+              >
+                <Lightbulb size={10} />
+                Analyze
+              </button>
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -1183,30 +1200,42 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             <div className="flex items-end justify-center gap-0.5 px-2 py-2 overflow-x-auto">
               {humanPlayer.hand.map((tile, index) => {
                 const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(index);
+                const isAnalyzeHovered = analyzeHoverId === tile.id;
                 return (
-                  <DraggableHandTile
+                  <div
                     key={tile.id}
-                    index={index}
-                    tileId={tile.id}
-                    moveTile={handleMoveTile}
-                    onClick={() => handleTileClick(index)}
+                    className="relative"
+                    style={isAnalyzeHovered ? {
+                      outline: '3px solid #B5704F',
+                      outlineOffset: 2,
+                      borderRadius: 6,
+                      zIndex: 5,
+                      transition: 'outline 0.1s ease',
+                    } : { transition: 'outline 0.1s ease' }}
                   >
-                    <TileComponent
-                      tile={tile}
-                      size="lg"
-                      selected={isCharlestonSelected || game.selectedTileIndex === index}
-                      selectedColor={isCharlestonSelected ? '#B5704F' : undefined}
-                      interactive
-                    />
-                    {isCharlestonSelected && (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center z-10"
-                        style={{ background: '#B5704F', border: '2px solid #FFFDF7', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
-                        <span style={{ color: '#FFFDF7', fontSize: '0.5rem', fontWeight: 700 }}>
-                          {charlestonSelected.indexOf(index) + 1}
-                        </span>
-                      </div>
-                    )}
-                  </DraggableHandTile>
+                    <DraggableHandTile
+                      index={index}
+                      tileId={tile.id}
+                      moveTile={handleMoveTile}
+                      onClick={() => handleTileClick(index)}
+                    >
+                      <TileComponent
+                        tile={tile}
+                        size="lg"
+                        selected={isCharlestonSelected || game.selectedTileIndex === index}
+                        selectedColor={isCharlestonSelected ? '#B5704F' : undefined}
+                        interactive
+                      />
+                      {isCharlestonSelected && (
+                        <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center z-10"
+                          style={{ background: '#B5704F', border: '2px solid #FFFDF7', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
+                          <span style={{ color: '#FFFDF7', fontSize: '0.5rem', fontWeight: 700 }}>
+                            {charlestonSelected.indexOf(index) + 1}
+                          </span>
+                        </div>
+                      )}
+                    </DraggableHandTile>
+                  </div>
                 );
               })}
             </div>
@@ -1485,6 +1514,16 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
       {/* NMJL Card Modal */}
       <NMJLCard isOpen={showNMJL} onClose={() => setShowNMJL(false)} planHands={planHands} onAddPlan={handleAddPlan} playerBarHeight={playerBarHeight} />
+
+      {/* Analyze side panel */}
+      <AnalyzePanel
+        open={showAnalyze}
+        game={game}
+        playerIndex={0}
+        rack={activeRack}
+        onClose={() => { setShowAnalyze(false); setAnalyzeHoverId(null); }}
+        onTileHover={setAnalyzeHoverId}
+      />
 
       {/* Game Over Modal */}
       {game.phase === 'gameOver' && (
