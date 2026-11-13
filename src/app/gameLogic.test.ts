@@ -237,7 +237,7 @@ describe('2025 card clarifications', () => {
     // The "0" in 2025 is soap dragon; build correctly:
     const hand2: Tile[] = [
       flower(), flower(), flower(), flower(),
-      suited('bam', 2), dragon('green'), suited('bam', 2), suited('bam', 5),
+      suited('bam', 2), dragon('soap'), suited('bam', 2), suited('bam', 5),
       suited('crak', 2), suited('crak', 2), suited('crak', 2),
       suited('dot', 2), suited('dot', 2), suited('dot', 2),
     ];
@@ -247,11 +247,21 @@ describe('2025 card clarifications', () => {
   it('E1 – valid: FFFF 2025:g + pung 555:r + pung 555:b', () => {
     const hand: Tile[] = [
       flower(), flower(), flower(), flower(),
-      suited('bam', 2), dragon('green'), suited('bam', 2), suited('bam', 5),
+      suited('bam', 2), dragon('soap'), suited('bam', 2), suited('bam', 5),
       suited('crak', 5), suited('crak', 5), suited('crak', 5),
       suited('dot', 5), suited('dot', 5), suited('dot', 5),
     ];
     expect(checkSimpleWin(makePlayer(hand))).toBe(true);
+  });
+
+  it('E1 – invalid: the 0 in 2025 must be a White Dragon, not the suit dragon', () => {
+    const hand: Tile[] = [
+      flower(), flower(), flower(), flower(),
+      suited('bam', 2), dragon('green'), suited('bam', 2), suited('bam', 5),
+      suited('crak', 2), suited('crak', 2), suited('crak', 2),
+      suited('dot', 2), suited('dot', 2), suited('dot', 2),
+    ];
+    expect(checkSimpleWin(makePlayer(hand))).toBe(false);
   });
 
   it('E1 – invalid: FFFF 2025:g + pung 222:r + pung 555:b (mixed pungs)', () => {
@@ -293,12 +303,12 @@ describe('2025 card clarifications', () => {
   // ── E3: 2025 line 3 — three-suit hand: 2025 in one suit, 22+55 in second, DDDD in third ──
   it('E3 – valid: 2025:r 222:g 555:g DDDD:b — three distinct suits', () => {
     // Pattern: 2025:r 222:g 555:g DDDD:b
-    // r=crak, g=bam, b=dot → dragon for dot = soap
+    // r=crak, g=dot, b=bam → kong of Green Dragons. The 0 is always a White Dragon.
     const hand: Tile[] = [
-      suited('crak', 2), dragon('red'), suited('crak', 2), suited('crak', 5),
-      suited('bam', 2), suited('bam', 2), suited('bam', 2),
-      suited('bam', 5), suited('bam', 5), suited('bam', 5),
-      dragon('soap'), dragon('soap'), dragon('soap'), dragon('soap'),
+      suited('crak', 2), dragon('soap'), suited('crak', 2), suited('crak', 5),
+      suited('dot', 2), suited('dot', 2), suited('dot', 2),
+      suited('dot', 5), suited('dot', 5), suited('dot', 5),
+      dragon('green'), dragon('green'), dragon('green'), dragon('green'),
     ];
     expect(checkSimpleWin(makePlayer(hand))).toBe(true);
   });
@@ -356,9 +366,9 @@ describe('discard claim rules', () => {
   it('allows claiming Mah Jongg on a discard for a concealed singles-and-pairs hand', () => {
     const playerHand: Tile[] = [
       flower(), flower(),
-      suited('bam', 2), dragon('green'), suited('bam', 2),
+      suited('bam', 2), dragon('soap'), suited('bam', 2),
       suited('bam', 5),
-      suited('crak', 2), dragon('red'), suited('crak', 2),
+      suited('crak', 2), dragon('soap'), suited('crak', 2),
       suited('crak', 5),
       suited('dot', 2), dragon('soap'), suited('dot', 2),
     ];

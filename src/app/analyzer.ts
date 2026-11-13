@@ -1,554 +1,328 @@
-// Pure-function strategy analyzer for American Mahjong (NMJL).
-// No UI dependencies — designed to be unit-testable in isolation.
+// Strategy trainer for American Mah Jongg (NMJL). Pure functions, no UI.
+//
+// Built on the same matcher the engine uses (handMatcher), so its advice
+// follows the real rules: exposures must be whole card groups, jokers only in
+// pungs/kongs/quints, 0 = White Dragon, concealed hands allow no exposures.
 //
 // Public entry: analyze(game, playerIndex) -> AnalysisResult.
 
-import { Tile, Suit, Player, GameState } from './types';
+import type { Tile, GameState } from './types';
+import { ACTIVE_CARD, type CardSection, type CardPattern } from './cards';
 import {
-  ALL_NMJL_PATTERNS,
-  NMJLConcretePattern,
-  isJokerEligibleToken,
-  nmjlTileKey,
-  suitDragon,
-  SUIT_PERMS,
-} from './gameLogic';
+  ALL_PATTERNS, rankPlans, bestPlanPerHand, computeAvailability, countTiles,
+  evaluateVariant, progressCost, tileKey, isJoker, isJokerEligibleToken,
+  type RankedPlan, type Availability, type TileCounts,
+} from './handMatcher';
+import { getCallOptions, type CallGroupSize } from './gameLogic';
+import { simulateCall } from './aiStrategy';
 
 // ════════════════════════════════════════════════════════════════════════
-//   Block schema (derived at runtime from existing token strings)
+//   Card structure (one template per concrete pattern)
 // ════════════════════════════════════════════════════════════════════════
 
-export type BlockType =
-  | 'single' | 'pair' | 'pung' | 'kong' | 'quint' | 'sextet' | 'run';
+export type BlockType = 'single' | 'pair' | 'pung' | 'kong' | 'quint' | 'sextet' | 'run';
 
 export interface Block {
   id: string;
   type: BlockType;
   size: number;
   jokerable: boolean;
-  rawText: string;     // e.g. "FFFF", "112345", "DDD", "NEWS", "2025"
-  rawColor: string;    // 'g' | 'r' | 'b' | 'n'
-}
-
-export interface HandTemplate {
-  id: string;
-  index: number;       // index into ALL_NMJL_PATTERNS
-  blocks: Block[];
-  concealed: boolean;
-  // For tagging into the article's heuristic sections:
-  sectionTag: SectionTag;
-  label: string;       // human-readable, e.g. "FFFF 2025 222 222"
+  rawText: string;
+  rawColor: string;
 }
 
 export type SectionTag =
   | '2025' | '2468' | 'LikeNumbers' | 'Quints' | 'ConsecutiveRun'
   | '13579' | 'WindsDragons' | '369' | 'SinglesAndPairs' | 'Other';
 
-// ════════════════════════════════════════════════════════════════════════
-//   Token → Block adapter
-// ════════════════════════════════════════════════════════════════════════
+const SECTION_TAG: Record<CardSection, SectionTag> = {
+  year: '2025', '2468': '2468', likeNumbers: 'LikeNumbers', quints: 'Quints',
+  consecutiveRun: 'ConsecutiveRun', '13579': '13579', windsDragons: 'WindsDragons',
+  '369': '369', singlesPairs: 'SinglesAndPairs',
+};
 
-function isAllSame(s: string): boolean {
-  if (s.length === 0) return false;
-  for (let i = 1; i < s.length; i++) if (s[i] !== s[0]) return false;
-  return true;
+export interface HandTemplate {
+  id: string;
+  index: number;
+  handId: string;
+  blocks: Block[];
+  concealed: boolean;
+  sectionTag: SectionTag;
+  sectionName: string;
+  points: number;
+  label: string;
 }
 
-function tokenToBlock(text: string, color: string, idx: number): Block {
-  const size = text.length;
-  let type: BlockType;
-  if (size === 1) type = 'single';
-  else if (size === 2 && isAllSame(text)) type = 'pair';
-  else if (size === 3 && isAllSame(text)) type = 'pung';
-  else if (size === 4 && isAllSame(text)) type = 'kong';
-  else if (size === 5 && isAllSame(text)) type = 'quint';
-  else if (size === 6 && isAllSame(text)) type = 'sextet';
-  else type = 'run';
-  return {
-    id: `b${idx}`,
-    type, size,
-    jokerable: isJokerEligibleToken(text),
-    rawText: text,
-    rawColor: color,
-  };
+function blockType(text: string): BlockType {
+  const same = text.split('').every(ch => ch === text[0]);
+  if (text.length === 1) return 'single';
+  if (!same) return 'run';
+  return (['single', 'pair', 'pung', 'kong', 'quint', 'sextet'] as BlockType[])[Math.min(text.length, 6) - 1];
 }
 
-function patternToTemplate(pat: NMJLConcretePattern, idx: number): HandTemplate {
-  const blocks: Block[] = [];
-  let bi = 0;
-  for (const tok of pat.tokens) {
-    if (tok.c === 'o') continue;
-    blocks.push(tokenToBlock(tok.t, tok.c, bi++));
-  }
-  return {
-    id: `h${idx}`,
-    index: idx,
-    blocks,
-    concealed: pat.concealed,
-    sectionTag: classifySection(pat),
-    label: pat.tokens.filter(t => t.c !== 'o').map(t => t.t).join(' '),
-  };
-}
-
-function classifySection(pat: NMJLConcretePattern): SectionTag {
-  // Lightweight heuristic by content of the tokens.
-  const all = pat.tokens.map(t => t.t).join(' ');
-  if (all.includes('2025') || all.includes('0000') || all.includes('0:')) return '2025';
-  if (/[NEWS]+/.test(all) && (all.includes('NEWS') || /[NEWS]{2,}/.test(all))) {
-    if (/[1-9]/.test(all)) {
-      // Could be either; weight winds/dragons heavier when winds dominate
-      const windCount = (all.match(/[NEWS]/g) || []).length;
-      const digitCount = (all.match(/[1-9]/g) || []).length;
-      if (windCount >= digitCount) return 'WindsDragons';
-    } else {
-      return 'WindsDragons';
-    }
-  }
-  if (pat.tokens.some(t => /^[1-9]+$/.test(t.t) && /1.*3.*5.*7.*9/.test(t.t))) return '13579';
-  // Has 5-quints?
-  if (pat.tokens.some(t => isAllSame(t.t) && t.t.length >= 5)) return 'Quints';
-  // Singles/Pairs sections — patterns mostly composed of pairs and singles only
-  const allBlocks = pat.tokens.filter(t => t.c !== 'o');
-  const onlyPairsSingles = allBlocks.every(t => t.t.length <= 2 || /^[NEWS]+$/.test(t.t));
-  if (onlyPairsSingles && pat.concealed) return 'SinglesAndPairs';
-  // Like numbers — a single digit dominates
-  const digitsOnly = pat.tokens.flatMap(t => t.t.match(/[1-9]/g) || []);
-  if (digitsOnly.length >= 6 && new Set(digitsOnly).size === 1) return 'LikeNumbers';
-  // 369
-  if (digitsOnly.every(d => d === '3' || d === '6' || d === '9') && digitsOnly.length >= 4) return '369';
-  // 2468
-  if (digitsOnly.every(d => ['2','4','6','8'].includes(d)) && digitsOnly.length >= 4) return '2468';
-  // Consecutive Run — runs present
-  if (pat.tokens.some(t => !isAllSame(t.t) && /[1-9]/.test(t.t) && t.t.length >= 3)) return 'ConsecutiveRun';
-  return 'Other';
-}
-
-let _templateCache: HandTemplate[] | null = null;
+let templateCache: HandTemplate[] | null = null;
 export function getHandTemplates(): HandTemplate[] {
-  if (_templateCache) return _templateCache;
-  _templateCache = ALL_NMJL_PATTERNS.map((pat, idx) => patternToTemplate(pat, idx));
-  return _templateCache;
+  if (templateCache) return templateCache;
+  templateCache = ALL_PATTERNS.map((pat, index) => ({
+    id: `h${index}`,
+    index,
+    handId: pat.handId,
+    concealed: pat.concealed,
+    sectionTag: SECTION_TAG[pat.section],
+    sectionName: ACTIVE_CARD.sectionNames[pat.section],
+    points: pat.points,
+    label: pat.label,
+    blocks: pat.tokens.filter(t => t.c !== 'o').map((t, i) => ({
+      id: `b${i}`, type: blockType(t.t), size: t.t.length,
+      jokerable: isJokerEligibleToken(t.t), rawText: t.t, rawColor: t.c,
+    })),
+  }));
+  return templateCache;
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Tile counts
-// ════════════════════════════════════════════════════════════════════════
-
-interface TileCounts {
-  counts: Map<string, number>;
-  jokers: number;
-  totalNonJoker: number;
-}
-
-function buildCounts(tiles: Tile[]): TileCounts {
-  const counts = new Map<string, number>();
-  let jokers = 0;
-  let totalNonJoker = 0;
-  for (const t of tiles) {
-    if (t.type === 'special' && t.specialType === 'joker') { jokers++; continue; }
-    if (t.type === 'special' && t.specialType === 'blank') continue;
-    const k = nmjlTileKey(t);
-    counts.set(k, (counts.get(k) || 0) + 1);
-    totalNonJoker++;
-  }
-  return { counts, jokers, totalNonJoker };
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Block → tile-needs resolution (for a chosen suit perm + dragon assignment)
-// ════════════════════════════════════════════════════════════════════════
-
-interface ResolvedBlock {
-  blockId: string;
-  size: number;
-  jokerable: boolean;
-  needs: Map<string, number>;   // tileKey -> count
-  isPair: boolean;
-}
-
-function resolveBlock(
-  block: Block,
-  suitMap: Record<string, Suit>,
-  neutralDragonChoice: string | null,
-): ResolvedBlock | null {
-  const text = block.rawText;
-  const color = block.rawColor;
-  const needs = new Map<string, number>();
-  const isPair = block.type === 'pair';
-
-  // Flowers
-  if (/^F+$/.test(text)) {
-    needs.set('flower', text.length);
-    return { blockId: block.id, size: block.size, jokerable: block.jokerable, needs, isPair };
-  }
-
-  // Winds (literal letters)
-  if (/^[NEWS]+$/.test(text)) {
-    const wm: Record<string, string> = { N: 'north', E: 'east', W: 'west', S: 'south' };
-    for (const ch of text) {
-      const k = `w_${wm[ch]}`;
-      needs.set(k, (needs.get(k) || 0) + 1);
-    }
-    return { blockId: block.id, size: block.size, jokerable: block.jokerable, needs, isPair };
-  }
-
-  // Dragons (D-tokens)
-  if (/^D+$/.test(text)) {
-    if (color === 'n') {
-      if (!neutralDragonChoice) return null;
-      needs.set(`d_${neutralDragonChoice}`, text.length);
-    } else {
-      const s = suitMap[color];
-      if (!s) return null;
-      needs.set(`d_${suitDragon(s)}`, text.length);
-    }
-    return { blockId: block.id, size: block.size, jokerable: block.jokerable, needs, isPair };
-  }
-
-  // Suited / digit-bearing tokens (including 0 = matching dragon)
-  const suit = suitMap[color];
-  if (!suit) return null;
-  for (const ch of text) {
-    const digit = parseInt(ch);
-    if (Number.isNaN(digit)) continue;
-    if (digit === 0) {
-      const k = `d_${suitDragon(suit)}`;
-      needs.set(k, (needs.get(k) || 0) + 1);
-    } else if (digit >= 1 && digit <= 9) {
-      const k = `s_${suit}_${digit}`;
-      needs.set(k, (needs.get(k) || 0) + 1);
-    }
-  }
-  return { blockId: block.id, size: block.size, jokerable: block.jokerable, needs, isPair };
-}
-
-interface ResolvedPattern {
-  blocks: ResolvedBlock[];
-  totalSize: number;
-}
-
-function resolvePattern(
-  template: HandTemplate,
-  suitMap: Record<string, Suit>,
-  neutralDragonChoice: string | null,
-): ResolvedPattern | null {
-  const blocks: ResolvedBlock[] = [];
-  let totalSize = 0;
-  for (const block of template.blocks) {
-    const r = resolveBlock(block, suitMap, neutralDragonChoice);
-    if (!r) return null;
-    blocks.push(r);
-    totalSize += r.size;
-  }
-  return { blocks, totalSize };
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Per-template scoring
-// ════════════════════════════════════════════════════════════════════════
-
-export interface BlockFill {
-  blockId: string;
-  size: number;
-  jokerable: boolean;
-  isPair: boolean;
-  tileKey: string | null;       // primary key (for runs, undefined → null)
-  realFilled: number;
-  jokersUsed: number;
-  remaining: number;
-}
-
-export interface ScoreDetails {
-  template: HandTemplate;
-  blockFills: BlockFill[];
-  realTilesUsed: number;
-  jokersUsed: number;
-  jokersAvailable: number;
-  pairsNeeded: number;
-  pairsHeld: number;
-  gapTiles: { tileKey: string; need: number; visibleRemaining: number }[];
-  feasibility: number;            // 0–100
-  matchedTileKeys: Set<string>;   // which player-tile keys filled blocks
-  pairKeys: Set<string>;          // tile keys held that are filling a pair-block in this score
-  feasibleAtAll: boolean;         // false if a non-jokerable shortfall makes it impossible
-}
-
-// Score one resolved pattern against player's tile counts.
-function scoreResolved(
-  template: HandTemplate,
-  resolved: ResolvedPattern,
-  myCounts: TileCounts,
-  visibleTileCounts: Map<string, number>, // copies still unseen
-): ScoreDetails {
-  const remaining = new Map(myCounts.counts);
-  let jokersLeft = myCounts.jokers;
-  let realUsed = 0;
-  let jokersUsed = 0;
-  let pairsNeeded = 0;
-  let pairsHeld = 0;
-  let nonJokerShortfall = 0;
-  const blockFills: BlockFill[] = [];
-  const gapTiles: { tileKey: string; need: number; visibleRemaining: number }[] = [];
-  const matchedTileKeys = new Set<string>();
-  const pairKeys = new Set<string>();
-
-  // Process non-jokerable blocks first (greedy): pairs/singles/runs.
-  // This matches the existing matchesPattern approach.
-  const ordered = [...resolved.blocks].sort((a, b) => {
-    if (a.jokerable === b.jokerable) return 0;
-    return a.jokerable ? 1 : -1; // non-jokerable first
-  });
-
-  for (const rb of ordered) {
-    let blockReal = 0;
-    let blockJokers = 0;
-    let blockUnmet = 0;
-    // Identify primary key for the block (run/pair/etc. may have multiple keys)
-    let primaryKey: string | null = null;
-    let largestKeyCount = 0;
-    for (const [k, n] of rb.needs) if (n > largestKeyCount) { largestKeyCount = n; primaryKey = k; }
-
-    for (const [k, needed] of rb.needs) {
-      const have = remaining.get(k) || 0;
-      const used = Math.min(have, needed);
-      remaining.set(k, have - used);
-      blockReal += used;
-      const short = needed - used;
-      if (short > 0) {
-        if (rb.jokerable) {
-          const j = Math.min(jokersLeft, short);
-          jokersLeft -= j;
-          blockJokers += j;
-          if (j < short) blockUnmet += short - j;
-        } else {
-          blockUnmet += short;
-          nonJokerShortfall += short;
-          gapTiles.push({
-            tileKey: k,
-            need: short,
-            visibleRemaining: visibleTileCounts.get(k) ?? 0,
-          });
-        }
-      }
-      if (used > 0) matchedTileKeys.add(k);
-    }
-
-    if (rb.isPair) {
-      if (blockReal === rb.size) { pairsHeld++; if (primaryKey) pairKeys.add(primaryKey); }
-      else pairsNeeded++;
-    }
-
-    blockFills.push({
-      blockId: rb.blockId,
-      size: rb.size,
-      jokerable: rb.jokerable,
-      isPair: rb.isPair,
-      tileKey: primaryKey,
-      realFilled: blockReal,
-      jokersUsed: blockJokers,
-      remaining: blockUnmet,
-    });
-
-    realUsed += blockReal;
-    jokersUsed += blockJokers;
-  }
-
-  const tilesPlaced = realUsed + jokersUsed;
-  // Base feasibility: % of the 14 tiles we have a path to.
-  let feasibility = (tilesPlaced / 14) * 100;
-  // Hard penalty for non-jokerable shortfalls (impossible without external help).
-  if (nonJokerShortfall > 0) feasibility -= nonJokerShortfall * 6;
-  // Tiebreaker nudge: pairs-held credit (valuable to preserve)
-  feasibility += pairsHeld * 0.5;
-  if (feasibility < 0) feasibility = 0;
-  if (feasibility > 100) feasibility = 100;
-
-  return {
-    template,
-    blockFills,
-    realTilesUsed: realUsed,
-    jokersUsed,
-    jokersAvailable: jokersLeft,
-    pairsNeeded,
-    pairsHeld,
-    gapTiles,
-    feasibility,
-    matchedTileKeys,
-    pairKeys,
-    feasibleAtAll: nonJokerShortfall === 0 || nonJokerShortfall <= 2,
-  };
-}
-
-function templateNeedsNeutralDragon(template: HandTemplate): boolean {
-  return template.blocks.some(b => /^D+$/.test(b.rawText) && b.rawColor === 'n');
-}
-
-function scoreTemplateAgainstHand(
-  template: HandTemplate,
-  myCounts: TileCounts,
-  hasExposures: boolean,
-  visibleTileCounts: Map<string, number>,
-): ScoreDetails {
-  if (template.concealed && hasExposures) {
-    // Concealed pattern is incompatible with exposures — feasibility 0.
-    return makeZeroScore(template);
-  }
-
-  let best: ScoreDetails | null = null;
-  const dragonOptions: (string | null)[] =
-    templateNeedsNeutralDragon(template) ? ['red', 'green', 'soap'] : [null];
-
-  for (const [g, r, b] of SUIT_PERMS) {
-    const suitMap: Record<string, Suit> = { g, r, b };
-    for (const dragon of dragonOptions) {
-      const resolved = resolvePattern(template, suitMap, dragon);
-      if (!resolved) continue;
-      if (resolved.totalSize !== 14) continue;
-      const score = scoreResolved(template, resolved, myCounts, visibleTileCounts);
-      if (!best || score.feasibility > best.feasibility) best = score;
-    }
-  }
-
-  return best ?? makeZeroScore(template);
-}
-
-function makeZeroScore(template: HandTemplate): ScoreDetails {
-  return {
-    template,
-    blockFills: [],
-    realTilesUsed: 0,
-    jokersUsed: 0,
-    jokersAvailable: 0,
-    pairsNeeded: 0,
-    pairsHeld: 0,
-    gapTiles: [],
-    feasibility: 0,
-    matchedTileKeys: new Set(),
-    pairKeys: new Set(),
-    feasibleAtAll: false,
-  };
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Visibility — count of each tile-key still UNSEEN by us
-// ════════════════════════════════════════════════════════════════════════
-
-const ALL_BASE_COPIES: { [k: string]: number } = (() => {
-  const m: { [k: string]: number } = {};
-  // Suited 1-9 × 3 suits × 4 copies each
-  for (const s of ['bam', 'crak', 'dot']) for (let v = 1; v <= 9; v++) m[`s_${s}_${v}`] = 4;
-  for (const w of ['north', 'east', 'south', 'west']) m[`w_${w}`] = 4;
-  for (const d of ['red', 'green', 'soap']) m[`d_${d}`] = 4;
-  m['flower'] = 8; // configurable; conservative default
-  return m;
-})();
-
-function buildVisibilityMap(game: GameState, myIndex: number): Map<string, number> {
-  // Start from full copies, subtract everything visible to us (our hand,
-  // discard pool, all exposures including ours).
-  const remaining = new Map<string, number>();
-  for (const k of Object.keys(ALL_BASE_COPIES)) remaining.set(k, ALL_BASE_COPIES[k]);
-
-  const dec = (k: string, n = 1) => {
-    if (!remaining.has(k)) return;
-    remaining.set(k, Math.max(0, (remaining.get(k) || 0) - n));
-  };
-
-  for (const t of game.discardPool) {
-    if (t.type === 'special' && (t.specialType === 'joker' || t.specialType === 'blank')) continue;
-    dec(nmjlTileKey(t));
-  }
-  for (let i = 0; i < game.players.length; i++) {
-    const p = game.players[i];
-    for (const grp of p.exposures) for (const t of grp) {
-      if (t.type === 'special' && (t.specialType === 'joker' || t.specialType === 'blank')) continue;
-      dec(nmjlTileKey(t));
-    }
-    if (i === myIndex) {
-      for (const t of p.hand) {
-        if (t.type === 'special' && (t.specialType === 'joker' || t.specialType === 'blank')) continue;
-        dec(nmjlTileKey(t));
-      }
-    }
-  }
-  return remaining;
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Phase detector
+//   Phase
 // ════════════════════════════════════════════════════════════════════════
 
 export type PhaseLabel = 'charleston' | 'early' | 'mid' | 'end';
 
 export function detectPhase(game: GameState): PhaseLabel {
   if (game.phase === 'charleston') return 'charleston';
-  const wallStart = game.config.totalTiles;
   const wallRemaining = game.wall.length;
-  const wallFraction = wallRemaining / Math.max(1, wallStart);
-  const totalDiscards = game.discardPool.length;
-  const avgDiscardsPerPlayer = totalDiscards / Math.max(1, game.config.playerCount);
+  const wallFraction = wallRemaining / Math.max(1, game.config.totalTiles);
+  const avgDiscards = game.discardPool.length / Math.max(1, game.config.playerCount);
   const anyExposures = game.players.some(p => p.exposures.length > 0);
   const someoneClose = game.players.some(p => p.exposures.length >= 2);
   if (wallRemaining < 20 || someoneClose) return 'end';
   if (anyExposures || wallFraction < 0.5) return 'mid';
-  if (avgDiscardsPerPlayer <= 5 && !anyExposures) return 'early';
+  if (avgDiscards <= 5) return 'early';
   return 'mid';
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Scoring all templates + ranking top candidates
+//   Labels
 // ════════════════════════════════════════════════════════════════════════
 
-export interface CandidateHand {
-  handName: string;
-  section: SectionTag;
-  feasibility: number;         // rounded 0–100
-  rawFeasibility: number;
-  tilesYouHave: string[];      // user-friendly labels
-  tilesYouNeed: string[];      // user-friendly labels
-  pairsNeeded: number;
-  pairsHeld: number;
-  concealed: boolean;
-  jokersUsable: number;        // jokers consumed by this hand's plan
-  reasoning: string;
-  template: HandTemplate;
-  score: ScoreDetails;
-  fading: boolean;             // a key tile heavily discarded / opponent racing
-}
-
-function rankCandidates(scores: ScoreDetails[]): ScoreDetails[] {
-  const sorted = [...scores].sort((a, b) => {
-    const df = b.feasibility - a.feasibility;
-    if (Math.abs(df) > 10) return df;
-    // Within ~10 feasibility points: tiebreakers
-    if (a.pairsNeeded !== b.pairsNeeded) return a.pairsNeeded - b.pairsNeeded; // fewer pairs needed wins
-    if (a.template.concealed !== b.template.concealed) return a.template.concealed ? 1 : -1; // non-concealed wins
-    return (b.realTilesUsed + b.jokersUsed) - (a.realTilesUsed + a.jokersUsed);
-  });
-  return sorted;
-}
-
-function tileKeyToLabel(k: string): string {
+export function tileKeyToLabel(k: string): string {
   if (k === 'flower') return 'Flower';
+  if (k === 'joker') return 'Joker';
   if (k.startsWith('s_')) {
     const [, suit, val] = k.split('_');
-    const suitLabel = suit === 'bam' ? 'B' : suit === 'crak' ? 'C' : 'D';
-    return `${val}${suitLabel}`;
+    return `${val} ${suit === 'bam' ? 'Bam' : suit === 'crak' ? 'Crak' : 'Dot'}`;
   }
-  if (k.startsWith('w_')) {
-    const dir = k.slice(2);
-    return dir.charAt(0).toUpperCase() + dir.slice(1) + ' Wind';
-  }
-  if (k.startsWith('d_')) {
-    const c = k.slice(2);
-    if (c === 'red') return 'Red Dragon';
-    if (c === 'green') return 'Green Dragon';
-    if (c === 'soap') return 'White Dragon';
-  }
+  if (k.startsWith('w_')) return `${k[2].toUpperCase()}${k.slice(3)} Wind`;
+  if (k === 'd_red') return 'Red Dragon';
+  if (k === 'd_green') return 'Green Dragon';
+  if (k === 'd_soap') return 'White Dragon';
   return k;
 }
 
+/** The plan's groups with suits filled in, e.g. "FF 444 5555 66666". */
+function concreteLabel(plan: RankedPlan): string {
+  return plan.progress.variant.groups.map(g => g.text).join(' ');
+}
+
 // ════════════════════════════════════════════════════════════════════════
-//   Per-tile advice (KEEP / DISCARD / PASS / WATCH)
+//   Candidates
+// ════════════════════════════════════════════════════════════════════════
+
+export interface CandidateHand {
+  handName: string;          // this plan's groups, e.g. "FF 444 5555 66666"
+  handId: string;            // card line id, e.g. "QU-1"
+  cardLine: string;          // the line as printed, e.g. "FF 111 2222 33333"
+  section: SectionTag;
+  sectionName: string;
+  points: number;
+  feasibility: number;       // 0–100
+  missing: number;           // tiles still to collect
+  tilesYouHave: string[];
+  tilesYouNeed: string[];
+  pairsNeeded: number;
+  pairsHeld: number;
+  concealed: boolean;
+  jokersUsable: number;
+  reasoning: string;
+  fading: boolean;
+  plan: RankedPlan;
+}
+
+function pairFills(plan: RankedPlan) {
+  return plan.progress.fills.filter(f => !f.jokerable && f.size === 2 && f.needs.size === 1);
+}
+
+function feasibilityOf(plan: RankedPlan): number {
+  if (plan.progress.missing === 0) return 100;
+  return Math.max(0, Math.min(99, Math.round(((14 - plan.cost) / 14) * 100)));
+}
+
+function rankCandidates(cands: CandidateHand[]): CandidateHand[] {
+  return [...cands].sort((a, b) => {
+    const df = b.feasibility - a.feasibility;
+    if (Math.abs(df) > 10) return df;
+    if (a.pairsNeeded !== b.pairsNeeded) return a.pairsNeeded - b.pairsNeeded;   // fewer pairs to build
+    if (a.concealed !== b.concealed) return a.concealed ? 1 : -1;                // exposable is easier
+    if (a.missing !== b.missing) return a.missing - b.missing;
+    return b.points - a.points;
+  });
+}
+
+function buildCandidate(plan: RankedPlan, avail: Availability, racingKeys: Set<string>): CandidateHand {
+  const p = plan.progress;
+  const have: string[] = [];
+  for (const [k, n] of p.naturalUse) for (let i = 0; i < n; i++) have.push(tileKeyToLabel(k));
+  for (const f of p.fills) if (f.exposed) for (let i = 0; i < f.size; i++) have.push(`${tileKeyToLabel(f.key!)} (exposed)`);
+  if (p.jokersUsed > 0) have.push(`${p.jokersUsed}× Joker`);
+
+  const need: string[] = [];
+  for (const [k, n] of p.nonJokerShort) need.push(`${n}× ${tileKeyToLabel(k)}`);
+  for (const f of p.fills) {
+    if (f.jokerable && !f.exposed && f.missing > 0) need.push(`${f.missing}× ${tileKeyToLabel(f.key!)} (or Joker)`);
+  }
+
+  const pairs = pairFills(plan);
+  const pairsHeld = pairs.filter(f => f.missing === 0).length;
+  const pairsNeeded = pairs.length - pairsHeld;
+
+  let fading = false;
+  for (const [k, short] of p.nonJokerShort) if ((avail.unseen.get(k) ?? 0) <= short) fading = true;
+  for (const f of p.fills) {
+    if (f.exposed) continue;
+    for (const k of f.needs.keys()) if (racingKeys.has(k) && f.missing > 0) fading = true;
+  }
+
+  const c: CandidateHand = {
+    handName: concreteLabel(plan),
+    handId: plan.pattern.handId,
+    cardLine: plan.pattern.label,
+    section: SECTION_TAG[plan.pattern.section],
+    sectionName: ACTIVE_CARD.sectionNames[plan.pattern.section],
+    points: plan.pattern.points,
+    feasibility: feasibilityOf(plan),
+    missing: p.missing,
+    tilesYouHave: have,
+    tilesYouNeed: need,
+    pairsNeeded,
+    pairsHeld,
+    concealed: plan.pattern.concealed,
+    jokersUsable: p.jokersUsed,
+    reasoning: '',
+    fading,
+    plan,
+  };
+  c.reasoning = composeReasoning(c);
+  return c;
+}
+
+function composeReasoning(c: CandidateHand): string {
+  const parts: string[] = [];
+  if (c.missing === 0) parts.push('This hand is complete — declare Mah Jongg!');
+  else parts.push(`${c.missing} tile${c.missing === 1 ? '' : 's'} away (${c.sectionName}, ${c.points} points).`);
+  if (c.jokersUsable > 0) parts.push(`${c.jokersUsable} of your Jokers already have a home in it.`);
+  if (c.pairsNeeded === 0 && c.pairsHeld > 0) {
+    parts.push(`Your pair${c.pairsHeld === 1 ? ' is' : 's are'} already in place — pairs can't use Jokers, so that's the hard part done.`);
+  } else if (c.pairsNeeded > 0) {
+    parts.push(`It still needs ${c.pairsNeeded} pair${c.pairsNeeded === 1 ? '' : 's'}, and a Joker can't fill a pair.`);
+  }
+  parts.push(c.concealed
+    ? 'Concealed (C): you must draw every tile yourself — you can only call a discard for Mah Jongg.'
+    : 'Exposed (X): you can call discards to complete its pungs and kongs.');
+  if (c.fading) parts.push('Fading: a tile it needs is nearly gone, or an opponent is collecting the same tiles.');
+  return parts.join(' ');
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   Reading opponents' exposures
+// ════════════════════════════════════════════════════════════════════════
+
+interface OpponentRead {
+  playerIndex: number;
+  name: string;
+  exposures: number;
+  likelyHands: string[];         // card lines their exposures still fit
+  neededKeys: Set<string>;       // tiles those hands still need
+  dead: boolean;                 // no line on the card fits their exposures
+}
+
+/**
+ * What each opponent with exposures is probably building. Only lines on the
+ * card that their exposures fit can still win for them.
+ */
+function readOpponents(game: GameState, me: number, avail: Availability): OpponentRead[] {
+  const out: OpponentRead[] = [];
+  game.players.forEach((p, i) => {
+    if (i === me || p.exposures.length === 0) return;
+    const plans = rankPlans([], p.exposures, avail);
+    const perHand = bestPlanPerHand(plans);
+    const neededKeys = new Set<string>();
+    for (const plan of plans.slice(0, 24)) {
+      for (const f of plan.progress.fills) if (!f.exposed) for (const k of f.needs.keys()) neededKeys.add(k);
+    }
+    out.push({
+      playerIndex: i, name: p.name, exposures: p.exposures.length,
+      likelyHands: perHand.slice(0, 3).map(pl => pl.pattern.label),
+      neededKeys, dead: plans.length === 0,
+    });
+  });
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   Charleston clusters — groupings that signal your hand if passed
+// ════════════════════════════════════════════════════════════════════════
+
+export type CharlestonCluster =
+  | 'sameNumberDifferentSuits' | 'consecutiveOrNear' | 'allOneSuit' | 'allWinds' | 'allDragons';
+
+export function detectCharlestonClusters(tiles: Tile[]): { cluster: CharlestonCluster; tileIds: string[] }[] {
+  const out: { cluster: CharlestonCluster; tileIds: string[] }[] = [];
+  if (tiles.length === 0) return out;
+  const suited = tiles.filter((t): t is Extract<Tile, { type: 'suited' }> => t.type === 'suited');
+
+  const byValue = new Map<number, typeof suited>();
+  for (const t of suited) byValue.set(t.value, [...(byValue.get(t.value) || []), t]);
+  for (const arr of byValue.values()) {
+    if (arr.length >= 3 && new Set(arr.map(t => t.suit)).size >= 2) {
+      out.push({ cluster: 'sameNumberDifferentSuits', tileIds: arr.map(t => t.id) });
+    }
+  }
+
+  const bySuit = new Map<string, typeof suited>();
+  for (const t of suited) bySuit.set(t.suit, [...(bySuit.get(t.suit) || []), t]);
+  for (const arr of bySuit.values()) {
+    if (arr.length >= 3 && arr.length === suited.length) {
+      out.push({ cluster: 'allOneSuit', tileIds: arr.map(t => t.id) });
+      break;
+    }
+  }
+  for (const arr of bySuit.values()) {
+    if (arr.length < 3) continue;
+    const values = [...new Set(arr.map(t => t.value))].sort((a, b) => a - b);
+    let runLen = 1, runStart = 0, bestLen = 1, bestStart = 0;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i] - values[i - 1] <= 2) {
+        runLen++;
+        if (runLen > bestLen) { bestLen = runLen; bestStart = runStart; }
+      } else { runLen = 1; runStart = i; }
+    }
+    if (bestLen >= 3) {
+      const run = values.slice(bestStart, bestStart + bestLen);
+      out.push({ cluster: 'consecutiveOrNear', tileIds: arr.filter(t => run.includes(t.value)).map(t => t.id) });
+    }
+  }
+
+  const winds = tiles.filter(t => t.type === 'wind');
+  if (winds.length >= 3 && new Set(winds.map(t => (t as any).direction)).size >= 2) {
+    out.push({ cluster: 'allWinds', tileIds: winds.map(t => t.id) });
+  }
+  const dragons = tiles.filter(t => t.type === 'dragon');
+  if (dragons.length >= 3 && new Set(dragons.map(t => (t as any).color)).size >= 2) {
+    out.push({ cluster: 'allDragons', tileIds: dragons.map(t => t.id) });
+  }
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   Per-tile advice
 // ════════════════════════════════════════════════════════════════════════
 
 export type TileAction = 'KEEP' | 'DISCARD' | 'PASS' | 'WATCH';
@@ -558,182 +332,114 @@ export interface TileAdvice {
   tile: Tile;
   action: TileAction;
   reason: string;
-  rationaleKey: string;        // for "Why?" glossary lookup
-  contributesTo: number[];     // indices into topCandidates
-  danger?: boolean;            // defensive flag (mid/end phase)
+  rationaleKey: string;
+  contributesTo: number[];   // indices into topCandidates
+  danger?: boolean;
 }
 
-// "Leave-one-out" contribution: how much does the best feasibility drop if
-// we remove one copy of this tile-key from the hand?
-function contributionOfTileKey(
-  tileKey: string,
-  myCounts: TileCounts,
-  topTemplates: HandTemplate[],
-  hasExposures: boolean,
-  visibleTileCounts: Map<string, number>,
-  baselineByTemplate: Map<number, number>,
-): number {
-  // Reduce count of this key by one
-  const reducedCounts: TileCounts = {
-    counts: new Map(myCounts.counts),
-    jokers: myCounts.jokers,
-    totalNonJoker: myCounts.totalNonJoker - 1,
-  };
-  const have = reducedCounts.counts.get(tileKey) || 0;
-  if (have > 0) reducedCounts.counts.set(tileKey, have - 1);
-
+/** How much worse the top candidates get without one copy of `key`. */
+function contributionOf(key: string, hand: TileCounts, top: CandidateHand[], exposures: Tile[][], avail: Availability): number {
+  const reduced: TileCounts = { counts: new Map(hand.counts), jokers: hand.jokers };
+  if (key === 'joker') reduced.jokers = Math.max(0, reduced.jokers - 1);
+  else reduced.counts.set(key, Math.max(0, (reduced.counts.get(key) || 0) - 1));
   let drop = 0;
-  for (const tpl of topTemplates) {
-    const before = baselineByTemplate.get(tpl.index) ?? 0;
-    const after = scoreTemplateAgainstHand(tpl, reducedCounts, hasExposures, visibleTileCounts);
-    drop += Math.max(0, before - after.feasibility);
+  for (const c of top) {
+    const after = evaluateVariant(c.plan.progress.variant, reduced, exposures);
+    const cost = after ? progressCost(after, avail) : Infinity;
+    drop += (cost === Infinity ? 5 : cost) - c.plan.cost;
   }
   return drop;
 }
 
-function contributionOfJoker(
-  myCounts: TileCounts,
-  topTemplates: HandTemplate[],
-  hasExposures: boolean,
-  visibleTileCounts: Map<string, number>,
-  baselineByTemplate: Map<number, number>,
-): number {
-  const reducedCounts: TileCounts = {
-    counts: new Map(myCounts.counts),
-    jokers: Math.max(0, myCounts.jokers - 1),
-    totalNonJoker: myCounts.totalNonJoker,
+function adviseTile(
+  tile: Tile, top: CandidateHand[], phase: PhaseLabel,
+  danger: Map<string, OpponentRead>, contribution: (k: string) => number,
+): TileAdvice {
+  if (isJoker(tile)) {
+    return {
+      tileId: tile.id, tile, action: 'KEEP',
+      reason: phase === 'charleston'
+        ? 'Jokers may never be passed in the Charleston — and you would not want to: they fill any pung, kong or quint.'
+        : 'Keep your Jokers. They stand in for any tile in a pung, kong or quint, which makes them the most flexible tiles in your rack.',
+      rationaleKey: 'joker-never-discard',
+      contributesTo: top.map((_, i) => i),
+    };
+  }
+  if (tile.type === 'special' && tile.specialType === 'blank') {
+    return {
+      tileId: tile.id, tile, action: 'DISCARD',
+      reason: 'A blank never fits a hand. Use the Blank Trade to swap it for a tile from the discards.',
+      rationaleKey: 'blank-trade', contributesTo: [],
+    };
+  }
+
+  const key = tileKey(tile);
+  const contributesTo = top.map((c, i) => (c.plan.progress.naturalUse.has(key) ? i : -1)).filter(i => i >= 0);
+  const inHeldPair = top.some(c => pairFills(c.plan).some(f => f.missing === 0 && f.key === key));
+  const threat = phase === 'mid' || phase === 'end' ? danger.get(key) : undefined;
+
+  if (inHeldPair) {
+    return {
+      tileId: tile.id, tile, action: 'KEEP',
+      reason: 'Hold this pair — pairs are the hardest piece to build, and a Joker can\'t complete one.',
+      rationaleKey: 'pair-preservation', contributesTo,
+    };
+  }
+
+  if (tile.type === 'special' && tile.specialType === 'flower') {
+    return contributesTo.length > 0
+      ? { tileId: tile.id, tile, action: 'KEEP', reason: 'Flowers appear in many lines on the card, and this one fits your top hands.', rationaleKey: 'flowers', contributesTo }
+      : { tileId: tile.id, tile, action: 'WATCH', reason: 'Your top hands don\'t use Flowers right now, but many lines do. Hold one or two in case you switch.', rationaleKey: 'flowers', contributesTo };
+  }
+
+  if (contributesTo.length === 0) {
+    if (phase === 'charleston') {
+      return {
+        tileId: tile.id, tile, action: 'PASS',
+        reason: 'It doesn\'t fit any of your top hands. The Charleston is the time to move tiles like this on.',
+        rationaleKey: 'charleston-aggressive', contributesTo,
+      };
+    }
+    if (threat) {
+      return {
+        tileId: tile.id, tile, action: 'WATCH', danger: true,
+        reason: `${threat.name}'s exposures fit ${threat.likelyHands[0] ?? 'a hand'} — which can use this tile. Discard something safer if you can.`,
+        rationaleKey: 'defensive-discard', contributesTo,
+      };
+    }
+    return {
+      tileId: tile.id, tile, action: 'DISCARD',
+      reason: phase === 'early'
+        ? 'It doesn\'t fit any of your top hands. Safe to let go early.'
+        : 'It doesn\'t fit your top hands — letting it go makes room for tiles that do.',
+      rationaleKey: 'discard-no-fit', contributesTo,
+    };
+  }
+
+  const drop = contribution(key);
+  if (drop >= 0.9) {
+    return {
+      tileId: tile.id, tile, action: 'KEEP',
+      reason: `Your plan needs it — it fits ${contributesTo.length === 1 ? 'your top hand' : `${contributesTo.length} of your top hands`}.`,
+      rationaleKey: 'tile-fits', contributesTo,
+    };
+  }
+  if (threat) {
+    return {
+      tileId: tile.id, tile, action: 'WATCH', danger: true,
+      reason: `It only helps a little, and ${threat.name} may want it (${threat.likelyHands[0] ?? 'their exposures'}). Hold it for now.`,
+      rationaleKey: 'defensive-discard', contributesTo,
+    };
+  }
+  return {
+    tileId: tile.id, tile, action: phase === 'charleston' ? 'KEEP' : 'WATCH',
+    reason: 'A spare: it fits, but you already have enough of it for your top hands. A fair discard if you need room.',
+    rationaleKey: 'tile-marginal', contributesTo,
   };
-  let drop = 0;
-  for (const tpl of topTemplates) {
-    const before = baselineByTemplate.get(tpl.index) ?? 0;
-    const after = scoreTemplateAgainstHand(tpl, reducedCounts, hasExposures, visibleTileCounts);
-    drop += Math.max(0, before - after.feasibility);
-  }
-  return drop;
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Charleston cluster rules — never pass these groupings
-// ════════════════════════════════════════════════════════════════════════
-
-export type CharlestonCluster =
-  | 'sameNumberDifferentSuits'
-  | 'consecutiveOrNear'
-  | 'allOneSuit'
-  | 'allWinds'
-  | 'allDragons';
-
-export function detectCharlestonClusters(tiles: Tile[]): {
-  cluster: CharlestonCluster; tileIds: string[]
-}[] {
-  const out: { cluster: CharlestonCluster; tileIds: string[] }[] = [];
-  if (tiles.length === 0) return out;
-
-  // Same number across different suits
-  const byValue = new Map<number, Tile[]>();
-  for (const t of tiles) if (t.type === 'suited') {
-    if (!byValue.has(t.value)) byValue.set(t.value, []);
-    byValue.get(t.value)!.push(t);
-  }
-  for (const [, arr] of byValue) {
-    const suits = new Set(arr.map(t => (t as any).suit));
-    if (arr.length >= 3 && suits.size >= 2) {
-      out.push({ cluster: 'sameNumberDifferentSuits', tileIds: arr.map(t => t.id) });
-    }
-  }
-
-  // All one suit
-  const suitCounts = new Map<string, Tile[]>();
-  for (const t of tiles) if (t.type === 'suited') {
-    const s = (t as any).suit;
-    if (!suitCounts.has(s)) suitCounts.set(s, []);
-    suitCounts.get(s)!.push(t);
-  }
-  for (const [, arr] of suitCounts) {
-    if (arr.length >= Math.min(tiles.length, 3) && arr.length >= 3 && arr.length === tiles.filter(t => t.type === 'suited').length) {
-      out.push({ cluster: 'allOneSuit', tileIds: arr.map(t => t.id) });
-      break;
-    }
-  }
-
-  // Consecutive or near-consecutive within a single suit
-  for (const [, arr] of suitCounts) {
-    if (arr.length < 3) continue;
-    const values = [...new Set(arr.map((t: any) => t.value))].sort((a: number, b: number) => a - b) as number[];
-    let runLen = 1, runStart = 0, bestRunLen = 1, bestRunStart = 0;
-    for (let i = 1; i < values.length; i++) {
-      if (values[i] - values[i - 1] <= 2) {
-        runLen++;
-        if (runLen > bestRunLen) { bestRunLen = runLen; bestRunStart = runStart; }
-      } else {
-        runLen = 1; runStart = i;
-      }
-    }
-    if (bestRunLen >= 3) {
-      const runValues = values.slice(bestRunStart, bestRunStart + bestRunLen);
-      const runIds = arr.filter((t: any) => runValues.includes(t.value)).map(t => t.id);
-      out.push({ cluster: 'consecutiveOrNear', tileIds: runIds });
-    }
-  }
-
-  // All winds
-  const winds = tiles.filter(t => t.type === 'wind');
-  if (winds.length >= 3) {
-    const dirs = new Set(winds.map(t => (t as any).direction));
-    if (dirs.size >= 2) out.push({ cluster: 'allWinds', tileIds: winds.map(t => t.id) });
-  }
-
-  // All dragons
-  const dragons = tiles.filter(t => t.type === 'dragon');
-  if (dragons.length >= 3) {
-    const colors = new Set(dragons.map(t => (t as any).color));
-    if (colors.size >= 2) out.push({ cluster: 'allDragons', tileIds: dragons.map(t => t.id) });
-  }
-
-  return out;
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Defensive discard — flag tiles that complete an opponent exposure
-// ════════════════════════════════════════════════════════════════════════
-
-interface OpponentExposureSignal {
-  playerIndex: number;
-  tileKey: string;
-  reason: string;       // e.g. "completes their pung of 5C"
-}
-
-function detectOpponentDangerKeys(game: GameState, myIndex: number): Map<string, OpponentExposureSignal> {
-  const danger = new Map<string, OpponentExposureSignal>();
-  for (let i = 0; i < game.players.length; i++) {
-    if (i === myIndex) continue;
-    const p = game.players[i];
-    for (const grp of p.exposures) {
-      // For each exposure, compute the underlying tile-key and add it as danger
-      const counts = new Map<string, number>();
-      for (const t of grp) {
-        if (t.type === 'special' && t.specialType === 'joker') continue;
-        const k = nmjlTileKey(t);
-        counts.set(k, (counts.get(k) || 0) + 1);
-      }
-      // Most-common key in the exposure is the target
-      let topKey: string | null = null;
-      let topCount = 0;
-      for (const [k, c] of counts) if (c > topCount) { topKey = k; topCount = c; }
-      if (topKey && topCount >= 1) {
-        danger.set(topKey, {
-          playerIndex: i,
-          tileKey: topKey,
-          reason: `${p.name} exposed ${topCount}× ${tileKeyToLabel(topKey)}`,
-        });
-      }
-    }
-  }
-  return danger;
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Main entry: analyze()
+//   Main entry
 // ════════════════════════════════════════════════════════════════════════
 
 export interface AnalysisResult {
@@ -742,465 +448,208 @@ export interface AnalysisResult {
   tileAdvice: TileAdvice[];
   teachingNote: string;
   warnings: string[];
+  handDead: boolean;
 }
 
 export interface AnalyzeOptions {
-  topN?: number;                 // default 3
-  rack?: 1 | 2;                  // for Siamese; defaults to 1
-  /** Override: in tests we may want to lock the phase. */
+  topN?: number;
+  rack?: 1 | 2;
   forcePhase?: PhaseLabel;
 }
 
-export function analyze(
-  game: GameState,
-  playerIndex: number,
-  options: AnalyzeOptions = {},
-): AnalysisResult {
+export function analyze(game: GameState, playerIndex: number, options: AnalyzeOptions = {}): AnalysisResult {
   const player = game.players[playerIndex];
   const rack = options.rack ?? 1;
   const hand = rack === 2 ? player.hand2 : player.hand;
   const exposures = rack === 2 ? player.exposures2 : player.exposures;
-  const hasExposures = exposures.length > 0;
-
-  const myCounts = buildCounts(hand);
-  const visibleTileCounts = buildVisibilityMap(game, playerIndex);
-
   const phase = options.forcePhase ?? detectPhase(game);
-  const templates = getHandTemplates();
+  const avail = computeAvailability(game, playerIndex);
 
-  // Score every template
-  const allScores = templates.map(tpl =>
-    scoreTemplateAgainstHand(tpl, myCounts, hasExposures, visibleTileCounts)
-  );
+  const opponents = readOpponents(game, playerIndex, avail);
+  const racingKeys = new Set<string>();
+  for (const o of opponents) for (const k of o.neededKeys) racingKeys.add(k);
 
-  const ranked = rankCandidates(allScores);
-  const topN = options.topN ?? 3;
-  const top = ranked.slice(0, topN);
+  const plans = rankPlans(hand, exposures, avail);
+  const perHand = bestPlanPerHand(plans).slice(0, 12).map(pl => buildCandidate(pl, avail, racingKeys));
+  const topCandidates = rankCandidates(perHand).slice(0, options.topN ?? 3);
+  const handDead = plans.length === 0;
 
-  // Build top-candidate baselines (template index -> feasibility)
-  const baselineByTemplate = new Map<number, number>();
-  for (const s of top) baselineByTemplate.set(s.template.index, s.feasibility);
-
-  // Two-jokers heuristic: if 2+ jokers and no Quints in top 3, surface Quints
-  const hasQuintsInTop = top.some(s => s.template.sectionTag === 'Quints');
-  let quintPivot: ScoreDetails | null = null;
-  if (myCounts.jokers >= 2 && !hasQuintsInTop) {
-    const quintsScored = ranked.find(s => s.template.sectionTag === 'Quints');
-    if (quintsScored && quintsScored.feasibility > 0) quintPivot = quintsScored;
+  // Danger: tiles opponents' likely hands still need (only those close enough to matter).
+  const danger = new Map<string, OpponentRead>();
+  for (const o of opponents) {
+    if (o.dead) continue;
+    for (const k of o.neededKeys) if (!danger.has(k)) danger.set(k, o);
   }
 
-  // Build CandidateHand summaries
-  const topCandidates: CandidateHand[] = top.map(s => buildCandidate(s, hand, visibleTileCounts, game, playerIndex));
-
-  // ── Per-tile advice ────────────────────────────────────────────────
-  const tileAdvice: TileAdvice[] = [];
-  const dangerKeys = detectOpponentDangerKeys(game, playerIndex);
-
-  // Cache contribution per unique tile-key
-  const contributionCache = new Map<string, number>();
-  const getContribution = (tile: Tile): number => {
-    if (tile.type === 'special' && tile.specialType === 'joker') {
-      if (contributionCache.has('__joker')) return contributionCache.get('__joker')!;
-      const v = contributionOfJoker(myCounts, top.map(s => s.template), hasExposures, visibleTileCounts, baselineByTemplate);
-      contributionCache.set('__joker', v);
-      return v;
-    }
-    const k = nmjlTileKey(tile);
-    if (contributionCache.has(k)) return contributionCache.get(k)!;
-    const v = contributionOfTileKey(k, myCounts, top.map(s => s.template), hasExposures, visibleTileCounts, baselineByTemplate);
-    contributionCache.set(k, v);
-    return v;
+  const counts = countTiles(hand);
+  const cache = new Map<string, number>();
+  const contribution = (k: string) => {
+    if (!cache.has(k)) cache.set(k, contributionOf(k, counts, topCandidates, exposures, avail));
+    return cache.get(k)!;
   };
+  const tileAdvice = hand.map(t => adviseTile(t, topCandidates, phase, danger, contribution));
 
-  for (const tile of hand) {
-    const adv = adviseTile(
-      tile, hand, top, phase, dangerKeys, visibleTileCounts, getContribution
-    );
-    tileAdvice.push(adv);
+  // Quints pivot: with 2+ jokers, point to the best Quints line if it isn't already on top.
+  let quintPivot: CandidateHand | null = null;
+  if (counts.jokers >= 2 && !topCandidates.some(c => c.section === 'Quints')) {
+    const q = bestPlanPerHand(plans).find(pl => pl.pattern.section === 'quints');
+    if (q) quintPivot = buildCandidate(q, avail, racingKeys);
   }
-
-  // ── Teaching note ──────────────────────────────────────────────────
-  const teachingNote = composeTeachingNote(top, myCounts, phase, quintPivot, tileAdvice);
-
-  // ── Warnings ───────────────────────────────────────────────────────
-  const warnings = composeWarnings(top, visibleTileCounts, dangerKeys, phase, game, playerIndex);
-
-  return { phase, topCandidates, tileAdvice, teachingNote, warnings };
-}
-
-function buildCandidate(
-  s: ScoreDetails,
-  hand: Tile[],
-  visibleTileCounts: Map<string, number>,
-  game: GameState,
-  myIndex: number,
-): CandidateHand {
-  // tilesYouHave: matched real tile labels for this hand
-  const have: string[] = [];
-  const handCountsByKey = new Map<string, number>();
-  for (const t of hand) {
-    if (t.type === 'special' && t.specialType === 'joker') continue;
-    if (t.type === 'special' && t.specialType === 'blank') continue;
-    const k = nmjlTileKey(t);
-    handCountsByKey.set(k, (handCountsByKey.get(k) || 0) + 1);
-  }
-  for (const k of s.matchedTileKeys) {
-    const c = handCountsByKey.get(k) || 0;
-    for (let i = 0; i < c; i++) have.push(tileKeyToLabel(k));
-  }
-
-  // tilesYouNeed: from blockFills, surface block gaps
-  const needLabels: string[] = [];
-  for (const bf of s.blockFills) {
-    if (bf.remaining <= 0) continue;
-    if (bf.jokerable && bf.tileKey) {
-      needLabels.push(`${bf.remaining}× ${tileKeyToLabel(bf.tileKey)} (joker OK)`);
-    } else if (bf.tileKey) {
-      needLabels.push(`${bf.remaining}× ${tileKeyToLabel(bf.tileKey)}`);
-    }
-  }
-  // Faded? a needed pair tile discarded twice OR opponent exposure shares this tile-key
-  let fading = false;
-  for (const bf of s.blockFills) {
-    if (bf.isPair && bf.realFilled < bf.size && bf.tileKey) {
-      const visible = visibleTileCounts.get(bf.tileKey) ?? 0;
-      if (visible <= 1) { fading = true; break; }
-    }
-  }
-  if (!fading) {
-    // opponent exposed same key?
-    const oppKeys = detectOpponentDangerKeys(game, myIndex);
-    for (const bf of s.blockFills) {
-      if (bf.tileKey && oppKeys.has(bf.tileKey)) { fading = true; break; }
-    }
-  }
-
-  const reasoning = composeReasoning(s, fading);
 
   return {
-    handName: s.template.label,
-    section: s.template.sectionTag,
-    feasibility: Math.round(s.feasibility),
-    rawFeasibility: s.feasibility,
-    tilesYouHave: have,
-    tilesYouNeed: needLabels,
-    pairsNeeded: s.pairsNeeded,
-    pairsHeld: s.pairsHeld,
-    concealed: s.template.concealed,
-    jokersUsable: s.jokersUsed,
-    reasoning,
-    template: s.template,
-    score: s,
-    fading,
+    phase,
+    topCandidates,
+    tileAdvice,
+    teachingNote: composeTeachingNote(topCandidates, counts.jokers, phase, quintPivot, tileAdvice, handDead),
+    warnings: composeWarnings(topCandidates, avail, opponents, phase, handDead),
+    handDead,
   };
 }
-
-function composeReasoning(s: ScoreDetails, fading: boolean): string {
-  const parts: string[] = [];
-  parts.push(`${s.realTilesUsed} of your tiles fit this pattern${s.jokersUsed > 0 ? ` (plus ${s.jokersUsed} joker${s.jokersUsed === 1 ? '' : 's'})` : ''}.`);
-  if (s.pairsNeeded === 0 && s.pairsHeld > 0) {
-    parts.push(`Your pair${s.pairsHeld === 1 ? '' : 's'} ${s.pairsHeld === 1 ? 'is' : 'are'} already in place — pairs can't be jokered, so that's a big head start.`);
-  } else if (s.pairsNeeded > 0) {
-    parts.push(`You still need ${s.pairsNeeded} pair${s.pairsNeeded === 1 ? '' : 's'} (pairs can't be jokered).`);
-  }
-  if (s.template.concealed) parts.push('Concealed — must complete from the wall, not from discards.');
-  else parts.push('Exposable — you can call discards to complete it.');
-  if (fading) parts.push('⚠ Fading — a key tile is heavily discarded or another player may be racing this.');
-  return parts.join(' ');
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Per-tile decision logic
-// ════════════════════════════════════════════════════════════════════════
-
-function adviseTile(
-  tile: Tile,
-  hand: Tile[],
-  top: ScoreDetails[],
-  phase: PhaseLabel,
-  dangerKeys: Map<string, OpponentExposureSignal>,
-  visibleTileCounts: Map<string, number>,
-  getContribution: (t: Tile) => number,
-): TileAdvice {
-  // Joker: never discard.
-  if (tile.type === 'special' && tile.specialType === 'joker') {
-    return {
-      tileId: tile.id, tile, action: 'KEEP',
-      reason: "Never discard a Joker. Jokers are wildcards in pungs/kongs/quints — and you can sometimes redeem them later for the real tile.",
-      rationaleKey: 'joker-never-discard',
-      contributesTo: top.map((_, i) => i),
-    };
-  }
-
-  // Blank: usually deadweight; advise DISCARD (or trade).
-  if (tile.type === 'special' && tile.specialType === 'blank') {
-    return {
-      tileId: tile.id, tile, action: 'DISCARD',
-      reason: "Blank tile — try the Blank Trade to swap it for any tile in the discard pool.",
-      rationaleKey: 'blank-trade',
-      contributesTo: [],
-    };
-  }
-
-  const key = nmjlTileKey(tile);
-
-  // Identify which top candidates this tile contributes to (matched by key).
-  const contributesTo: number[] = [];
-  for (let i = 0; i < top.length; i++) {
-    if (top[i].matchedTileKeys.has(key)) contributesTo.push(i);
-  }
-
-  // Pair preservation: is this tile filling a pair-block in any top candidate?
-  const filsPairInTop = top.some(s => s.pairKeys.has(key));
-  if (filsPairInTop) {
-    return {
-      tileId: tile.id, tile, action: 'KEEP',
-      reason: "Hold this pair — pairs are the hardest piece to build, and a Joker can't complete one.",
-      rationaleKey: 'pair-preservation',
-      contributesTo,
-    };
-  }
-
-  // Flowers: KEEP by default.
-  if (tile.type === 'special' && tile.specialType === 'flower') {
-    if (contributesTo.length > 0) {
-      return {
-        tileId: tile.id, tile, action: 'KEEP',
-        reason: 'Flowers feed several hands on the card. This one fits one of your top candidates — definitely hold.',
-        rationaleKey: 'flowers',
-        contributesTo,
-      };
-    }
-    // No candidate uses flowers
-    if (phase === 'charleston') {
-      return {
-        tileId: tile.id, tile, action: 'WATCH',
-        reason: "None of your top hands need flowers right now, but flowers stay versatile. Don't pass away your only one too early.",
-        rationaleKey: 'flowers',
-        contributesTo: [],
-      };
-    }
-    return {
-      tileId: tile.id, tile, action: 'WATCH',
-      reason: 'Flower not used by your current top hands. Hold for now in case you pivot.',
-      rationaleKey: 'flowers',
-      contributesTo: [],
-    };
-  }
-
-  // White dragon (soap): versatile.
-  if (tile.type === 'dragon' && tile.color === 'soap') {
-    if (contributesTo.length > 0) {
-      return {
-        tileId: tile.id, tile, action: 'KEEP',
-        reason: 'White Dragon is a flexible tile and fits one of your top candidates.',
-        rationaleKey: 'white-dragon',
-        contributesTo,
-      };
-    }
-  }
-
-  const danger = dangerKeys.get(key);
-  const dangerFlag = danger !== undefined && (phase === 'mid' || phase === 'end');
-
-  // Charleston phase: recommend PASS for tiles that fit no top candidate.
-  if (phase === 'charleston') {
-    if (contributesTo.length === 0) {
-      return {
-        tileId: tile.id, tile, action: 'PASS',
-        reason: 'Doesn\'t fit any of your top hands. Charleston is the time to release tiles like this — opponents can\'t call them yet.',
-        rationaleKey: 'charleston-aggressive',
-        contributesTo: [],
-      };
-    }
-    // Contributes — KEEP
-    return {
-      tileId: tile.id, tile, action: 'KEEP',
-      reason: 'Useful in your top candidates — keep through Charleston.',
-      rationaleKey: 'tile-fits',
-      contributesTo,
-    };
-  }
-
-  // Otherwise (early/mid/end): tiles with no contribution → DISCARD.
-  if (contributesTo.length === 0) {
-    if (dangerFlag) {
-      return {
-        tileId: tile.id, tile, action: 'WATCH',
-        reason: `${danger!.reason}. Discarding this could feed them — find a less risky tile if possible.`,
-        rationaleKey: 'defensive-discard',
-        contributesTo: [],
-        danger: true,
-      };
-    }
-    return {
-      tileId: tile.id, tile, action: 'DISCARD',
-      reason: phase === 'early'
-        ? 'Doesn\'t fit any of your top candidate hands. Safe to release this early.'
-        : 'No fit in your top candidates — releasing this opens room for tiles that do fit.',
-      rationaleKey: 'discard-no-fit',
-      contributesTo: [],
-    };
-  }
-
-  // Contributes to candidates. Compute contribution magnitude.
-  const contribution = getContribution(tile);
-  if (contribution > 5) {
-    return {
-      tileId: tile.id, tile, action: 'KEEP',
-      reason: `Important to your plan — fits ${contributesTo.length === 1 ? 'your top candidate' : `${contributesTo.length} of your top candidates`}.`,
-      rationaleKey: 'tile-fits',
-      contributesTo,
-    };
-  }
-  // Low contribution — borderline.
-  if (dangerFlag) {
-    return {
-      tileId: tile.id, tile, action: 'WATCH',
-      reason: `${danger!.reason}. This tile only modestly helps your plan, but discarding it would risk feeding their exposure.`,
-      rationaleKey: 'defensive-discard',
-      contributesTo,
-      danger: true,
-    };
-  }
-  return {
-    tileId: tile.id, tile, action: 'WATCH',
-    reason: 'Modest fit — could help, but not central to your plan. Watch how the next few turns evolve.',
-    rationaleKey: 'tile-marginal',
-    contributesTo,
-  };
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//   Teaching note + warnings
-// ════════════════════════════════════════════════════════════════════════
 
 function composeTeachingNote(
-  top: ScoreDetails[],
-  myCounts: TileCounts,
-  phase: PhaseLabel,
-  quintPivot: ScoreDetails | null,
-  tileAdvice: TileAdvice[],
+  top: CandidateHand[], jokers: number, phase: PhaseLabel, quintPivot: CandidateHand | null,
+  advice: TileAdvice[], handDead: boolean,
 ): string {
-  if (top.length === 0) return 'No clear candidate hands yet — keep your options open and discard tiles that fit no section.';
-
-  const noFitCount = tileAdvice.filter(a => a.contributesTo.length === 0 &&
-    !(a.tile.type === 'special' && a.tile.specialType === 'joker')).length;
-
-  if (phase === 'charleston' && noFitCount >= 3) {
-    return `You have ${noFitCount} tiles that fit none of your top candidates. Pass these and decide your hand later — don't lock in too early.`;
+  if (handDead) {
+    return 'No line on the card fits your exposures with the tiles still out — your hand is dead. Switch to defense: discard tiles your opponents are unlikely to need.';
   }
+  if (top.length === 0) return 'No clear hand yet — keep your options open and let go of tiles that fit nothing.';
+  if (top[0].missing === 0) return `Your hand is complete: ${top[0].cardLine} (${top[0].points} points). Declare Mah Jongg!`;
 
-  if (myCounts.jokers >= 2 && quintPivot) {
-    return `You have ${myCounts.jokers} Jokers — a Quints hand becomes a strong pivot. Consider \"${quintPivot.template.label}\".`;
+  const noFit = advice.filter(a => a.contributesTo.length === 0 && !isJoker(a.tile)).length;
+  if (phase === 'charleston' && noFit >= 3) {
+    return `${noFit} of your tiles fit none of your top hands. Pass those, and don't commit to one hand yet — the Charleston will show you what's coming.`;
   }
-
-  const bestFew = top.slice(0, 2);
-  if (bestFew.length === 2 && Math.abs(bestFew[0].feasibility - bestFew[1].feasibility) < 10) {
-    const a = bestFew[0], b = bestFew[1];
-    return `Two paths are close in strength. Hand A (\"${a.template.label}\") needs ${a.pairsNeeded} pair${a.pairsNeeded === 1 ? '' : 's'} and is ${a.template.concealed ? 'concealed' : 'exposable'}. Hand B (\"${b.template.label}\") needs ${b.pairsNeeded}. Decide based on which gap tiles still look obtainable.`;
+  if (quintPivot) {
+    return `You hold ${jokers} Jokers — enough to make a Quints hand realistic. Keep "${quintPivot.cardLine}" (${quintPivot.points} points) in mind as a switch.`;
   }
-
+  if (top.length >= 2 && Math.abs(top[0].feasibility - top[1].feasibility) < 10) {
+    const [a, b] = top;
+    return `Two hands are close: "${a.cardLine}" is ${a.missing} away${a.concealed ? ' and concealed' : ''}; "${b.cardLine}" is ${b.missing} away${b.concealed ? ' and concealed' : ''}. Keep tiles that serve both until one pulls ahead.`;
+  }
   const lead = top[0];
   if (lead.pairsHeld > 0 && lead.pairsNeeded === 0) {
-    return `Your pair${lead.pairsHeld === 1 ? '' : 's'} for "${lead.template.label}" ${lead.pairsHeld === 1 ? 'is' : 'are'} already in place. Pairs can't be jokered — protect them.`;
+    return `Your pairs for "${lead.cardLine}" are in place. Pairs can't use Jokers, so protect them — the rest can be filled with Jokers or called discards.`;
   }
-  return `Your strongest target is "${lead.template.label}". Focus your discards on tiles that don't help this hand.`;
+  return `Your strongest line is "${lead.cardLine}" (${lead.sectionName}, ${lead.points} points), ${lead.missing} tiles away. Discard tiles it doesn't use.`;
 }
 
 function composeWarnings(
-  top: ScoreDetails[],
-  visibleTileCounts: Map<string, number>,
-  dangerKeys: Map<string, OpponentExposureSignal>,
-  phase: PhaseLabel,
-  game: GameState,
-  myIndex: number,
+  top: CandidateHand[], avail: Availability, opponents: OpponentRead[], phase: PhaseLabel, handDead: boolean,
 ): string[] {
   const warnings: string[] = [];
-
-  // Heavily discarded gap tiles for top candidate
-  if (top.length > 0) {
-    const lead = top[0];
-    for (const bf of lead.blockFills) {
-      if (bf.remaining > 0 && bf.tileKey) {
-        const visible = visibleTileCounts.get(bf.tileKey) ?? 0;
-        const totalCopies = ['flower'].includes(bf.tileKey) ? 8 : 4;
-        const used = totalCopies - visible;
-        if (used >= 2 && bf.remaining > 0) {
-          warnings.push(`${used} of the ${tileKeyToLabel(bf.tileKey)} you'd need have already been discarded or exposed. Watch for the rest.`);
-        }
+  if (handDead) warnings.push('Your hand is dead: no hand on the card fits your exposures with the tiles still available.');
+  const lead = top[0];
+  if (lead) {
+    for (const [k, short] of lead.plan.progress.nonJokerShort) {
+      const left = avail.unseen.get(k) ?? 0;
+      if (left <= short + 1) {
+        warnings.push(`You need ${short} more ${tileKeyToLabel(k)} for ${lead.cardLine}, and only ${left} ${left === 1 ? 'is' : 'are'} still out — a Joker can't stand in.`);
       }
     }
   }
-
-  // Opponents getting close
-  for (let i = 0; i < game.players.length; i++) {
-    if (i === myIndex) continue;
-    const p = game.players[i];
-    if (p.exposures.length >= 2) {
-      warnings.push(`${p.name} has ${p.exposures.length} exposures — they're well underway. Consider defensive discards.`);
+  for (const o of opponents) {
+    if (o.dead) continue;
+    if (o.exposures >= 2) {
+      warnings.push(`${o.name} has ${o.exposures} exposures that fit ${o.likelyHands.join(' or ')}. Be careful what you discard.`);
     }
   }
-
-  // Late phase
   if (phase === 'end' && warnings.length === 0) {
-    warnings.push('Late game — every discard matters. Check each tile against opponents\' exposures before releasing it.');
+    warnings.push('Late in the game — check each discard against what your opponents have exposed.');
   }
-
   return warnings;
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Glossary — referenced by `rationaleKey` in TileAdvice
+//   Call coaching — what an exposure would do to your hand
+// ════════════════════════════════════════════════════════════════════════
+
+export interface CallAssessment {
+  size: CallGroupSize;
+  fits: boolean;          // at least one hand on the card still works after this call
+  improves: boolean;      // it brings your best hand closer
+  message: string;
+}
+
+export function assessCall(game: GameState, playerIndex: number, size: CallGroupSize): CallAssessment | null {
+  const option = getCallOptions(game, playerIndex).find(o => o.size === size);
+  if (!option || !game.lastDiscarded) return null;
+  const player = game.players[playerIndex];
+  const avail = computeAvailability(game, playerIndex);
+  const before = rankPlans(player.hand, player.exposures, avail);
+  const sim = simulateCall(player.hand, game.lastDiscarded, option);
+  const after = rankPlans(sim.hand, [...player.exposures, sim.exposure], avail);
+  const label = option.label;
+  if (after.length === 0) {
+    return { size, fits: false, improves: false, message: `No hand on the card uses this ${label} with your tiles — calling it would leave your hand dead.` };
+  }
+  const best = after[0];
+  const improves = before.length === 0 || best.cost < before[0].cost - 0.5;
+  const gaveUp = before.length > 0 && before[0].pattern.concealed ? ` It gives up concealed hands like "${before[0].pattern.label}".` : '';
+  const missing = best.progress.missing;
+  return {
+    size, fits: true, improves,
+    message: `Fits "${best.pattern.label}" (${best.pattern.points} pts) — ${missing === 0 ? 'Mah Jongg!' : `${missing} tile${missing === 1 ? '' : 's'} away after the call`}.${improves ? '' : ' It doesn\'t bring you closer than you are now.'}${gaveUp}`,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   Glossary for the "Why?" links
 // ════════════════════════════════════════════════════════════════════════
 
 export const GLOSSARY: Record<string, { title: string; body: string }> = {
   'pair-preservation': {
     title: 'Pair Preservation',
-    body: "Pairs are exactly two identical tiles. Unlike pungs and kongs, pairs cannot be filled with a Joker. That makes the matching second tile the hardest single piece to obtain — protect any pair you already have.",
+    body: 'A pair is two identical tiles. Jokers can never be used in a pair (or a single, or a run like NEWS or 2025), and you can\'t call a discard to make one — except for Mah Jongg. So the second tile of a pair is often the hardest tile to get. Protect the pairs your hand needs.',
   },
   'joker-never-discard': {
-    title: 'Joker — Never Discard',
-    body: "Jokers are universal wildcards, but only inside groups of 3+ identical tiles (pungs, kongs, quints, sextets). They can never fill a pair or a single. If you don't have a use today, you may have one tomorrow — and you can sometimes 'redeem' a Joker on another player's exposure by trading the matching real tile.",
+    title: 'Jokers',
+    body: 'A Joker can stand in for any tile, but only in a pung, kong or quint (3, 4 or 5 identical tiles) — flowers and winds included. Never in a pair or single. Jokers may not be passed in the Charleston. On your turn you can trade a matching real tile for a Joker sitting in anyone\'s exposure.',
   },
   'flowers': {
     title: 'Flowers',
-    body: "Many NMJL hands include a Flower group. Holding at least one or two Flowers gives you flexibility across multiple sections. Don't pass your last Flower in Charleston unless you're confident none of your candidate hands need them.",
+    body: 'All flowers and seasons count as the same tile, "F". Many lines on the card start with FF, FFF or FFFF, so a couple of Flowers keep many hands open. A pung or kong of Flowers can use Jokers like any other.',
   },
   'white-dragon': {
-    title: 'White Dragon',
-    body: "On most NMJL cards, the White Dragon (soap) doubles as the digit 0 in the year-hand and as the Dragon for the dot suit. That dual role makes it one of the most flexible tiles in the wall.",
+    title: 'White Dragon (Soap)',
+    body: 'A 0 on the card is a White Dragon — for example the 0 in 2025. Used as a 0 it has no suit. As a dragon, White goes with Dots, Green with Bams and Red with Craks.',
   },
   'charleston-aggressive': {
-    title: 'Charleston — Be Aggressive',
-    body: "Discards during Charleston cannot be claimed by opponents, so this is the safest time to release tiles that don't fit your plan. Use it to clear deadweight and give yourself room to draw what you need.",
+    title: 'The Charleston',
+    body: 'Everyone passes three tiles at once — right, across, left, then (if all agree) left, across, right — and finally an optional courtesy pass of 0–3 tiles with the player across. On the last pass of each Charleston you may "blind pass": pass along tiles coming to you without looking. Use the Charleston to clear tiles that fit nothing. Jokers may never be passed.',
   },
   'defensive-discard': {
-    title: 'Defensive Discarding',
-    body: "Late in the game, every discard is a potential gift to an opponent. Look at each opponent's exposed groups, infer what they likely still need, and avoid discarding tiles that would complete those groups — even if it means weakening your own hand slightly.",
+    title: 'Reading Exposures',
+    body: 'An exposure tells you which lines on the card a player can still be making — exposures must match whole groups on one line. Late in the game, avoid discarding tiles those lines still need, even if it costs your own hand a little.',
   },
   'discard-no-fit': {
     title: 'Discard What Doesn\'t Fit',
-    body: "If a tile fits none of your top candidate hands, it's deadweight. Releasing it makes room in your rack for tiles that do fit. Always rank tiles by their contribution to your plan, not their face value.",
+    body: 'If a tile fits none of your top hands, let it go. Rank tiles by how much your plan needs them, not by how nice they look.',
   },
   'tile-fits': {
     title: 'This Tile Helps',
-    body: "Keep tiles that contribute to one or more of your top candidates. The more candidates a tile feeds, the more flexibility you preserve.",
+    body: 'Keep tiles your top hands use. A tile that fits more than one of them keeps more options open.',
   },
   'tile-marginal': {
-    title: 'Marginal — Watch',
-    body: "This tile makes a small contribution. Hold for now, but it's a candidate to release if you draw something better or need to make room.",
+    title: 'A Spare',
+    body: 'It fits a hand, but you already hold enough of it. It\'s one of the better tiles to give up when you need room.',
   },
   'blank-trade': {
-    title: 'Blank Tile',
-    body: "Some game configurations include Blank tiles. They're not useful on their own — use the Blank Trade action to swap a blank for any tile in the discard pool.",
+    title: 'Blank Tiles',
+    body: 'Blanks never fit a hand. On your turn you can trade a blank for any tile in the discard pool.',
   },
   'cluster-rule': {
-    title: 'Charleston Cluster Rules',
-    body: "During Charleston, never pass away groupings that signal a hand: same number across different suits (Like Numbers), consecutive numbers in a suit (Consecutive Run), all-one-suit, all-winds, or all-dragons. If you must pass a pair, split it across two recipients so neither opponent gets a free joker-bait.",
+    title: 'Don\'t Telegraph Your Hand',
+    body: 'In the Charleston, avoid passing groups that show what you are not collecting in ways that help others: same number in different suits, runs in one suit, all one suit, or all winds/dragons. If you must break a pair, send the two tiles to different players.',
   },
   'concealed-vs-exposed': {
     title: 'Concealed vs. Exposed',
-    body: "Concealed hands must be completed entirely from the wall — you can't call a discard for them. Exposed hands let you claim tiles others throw away, which is usually faster but reveals your plan.",
+    body: 'Lines marked C must be concealed: you can call a discard only for Mah Jongg. Lines marked X let you call discards for pungs, kongs and quints, which is faster but shows your plan.',
+  },
+  'dead-hand': {
+    title: 'Dead Hand',
+    body: 'A hand is dead when no line on the card can be completed — usually because an exposure doesn\'t fit any remaining line, or the tiles you need are all gone. A dead hand can\'t win, so play to stop others instead.',
   },
 };
+
+export type { CardPattern };

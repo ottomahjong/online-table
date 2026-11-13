@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, claimMahJonggOnDiscard } from '../gameLogic';
+import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
 import { AnalyzePanel } from './AnalyzePanel';
+import { assessCall } from '../analyzer';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
@@ -36,6 +37,11 @@ const CHARLESTON_STEPS: { direction: CharlestonDirection; label: string; group: 
   { direction: 'across', label: 'Pass Across', group: 'Second Charleston' },
   { direction: 'right', label: 'Pass Right', group: 'Second Charleston' },
 ];
+
+/** Blind passes are allowed on the last pass of each Charleston (3rd and 6th). */
+function isBlindPassStep(step: number, playerCount: number): boolean {
+  return playerCount >= 3 && (step === 2 || step === 5);
+}
 
 interface GameBoardProps {
   config: GameConfig;
@@ -131,26 +137,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     }
   }, []);
 
+  // The window closed (or the human passed): bots claim by the rules —
+  // Mah Jongg first, then exposures, next-in-turn breaking ties.
   const resolveCallingPhase = useCallback(() => {
-    setGame(prev => {
-      if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
-      if (prev.lastDiscardedBy === null) return passTurn(prev);
-      for (let offset = 1; offset < prev.config.playerCount; offset++) {
-        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-        if (canClaimMahJonggOnDiscard(prev, i)) {
-          return claimMahJonggOnDiscard(prev, i);
-        }
-      }
-      for (let offset = 1; offset < prev.config.playerCount; offset++) {
-        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-        if (prev.players[i].isHuman) continue;
-        const aiCallSize = aiShouldCall(prev, i);
-        if (aiCallSize !== null) {
-          return callTile(prev, i, aiCallSize);
-        }
-      }
-      return passTurn(prev);
-    });
+    setGame(prev => resolveDiscardClaims(prev, null));
   }, []);
 
   const executePendingAction = useCallback((action: PendingAction) => {
@@ -442,13 +432,18 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const handleCall = useCallback((groupSize?: CallGroupSize) => {
     if (isPaused) return;
     clearPendingAction();
-    setGame(prev => callTile(prev, 0, groupSize));
+    setGame(prev => {
+      const size = groupSize ?? getCallOptions(prev, 0)[0]?.size;
+      if (size === undefined) return prev;
+      // A bot's Mah Jongg, or an earlier-in-turn bot call, still outranks this.
+      return resolveDiscardClaims(prev, { kind: 'expose', size });
+    });
   }, [isPaused, clearPendingAction]);
 
   const handleClaimMahJongg = useCallback(() => {
     if (isPaused) return;
     clearPendingAction();
-    setGame(prev => claimMahJonggOnDiscard(prev, 0));
+    setGame(prev => resolveDiscardClaims(prev, { kind: 'mahjongg' }));
   }, [isPaused, clearPendingAction]);
 
   // Handle ignoring a discarded tile
@@ -567,6 +562,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const humanCallOptions: CallOption[] = isCallingPhase ? getCallOptions(game, 0) : [];
   const humanCanCall = humanCallOptions.length > 0;
+  // Tips mode: say what each possible call would do to your hand.
+  const callCoaching = tipsEnabled && humanCanCall
+    ? humanCallOptions.map(o => assessCall(game, 0, o.size)).filter((a): a is NonNullable<typeof a> => a !== null)
+    : [];
   const humanCanClaimDiscardMahJongg = isCallingPhase ? canClaimMahJonggOnDiscard(game, 0) : false;
   const hasSkippableWait = !!pendingAction && !isPaused && (
     pendingAction.kind === 'call-window' ||
@@ -632,29 +631,28 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const handleCharlestonPass = useCallback(() => {
     if (isPaused) return;
-    if (charlestonSelected.length !== 3) return;
     const stepInfo = CHARLESTON_STEPS[charlestonStep];
     if (!stepInfo) return;
+    const blindAllowed = isBlindPassStep(charlestonStep, config.playerCount);
+    if (charlestonSelected.length !== 3 && !(blindAllowed && charlestonSelected.length < 3)) return;
 
-    setGame(prev => {
-      const toIndex = getPassTarget(0, stepInfo.direction, config.playerCount);
-      const result = executeCharlestonPass(
-        prev.players,
-        0,
-        toIndex,
-        charlestonSelected,
-        stepInfo.direction,
-        config.playerCount,
-        prev.wall
-      );
-      return {
-        ...prev,
-        players: result.players,
-        wall: result.wall ?? prev.wall,
-      };
+    // Everyone passes at once; you receive from the player on the other side.
+    const result = executeCharlestonRound(
+      game.players, charlestonSelected, stepInfo.direction, config.playerCount, game.wall,
+      { blindAllowed, skill: config.botSkillLevel },
+    );
+    if (result.players === game.players) return;
+    const blindNote = result.blindForwarded > 0
+      ? ` You blind-passed ${result.blindForwarded} tile${result.blindForwarded === 1 ? '' : 's'} without looking.`
+      : '';
+    setGame({
+      ...game,
+      players: result.players,
+      wall: result.wall ?? game.wall,
+      message: `Passed ${stepInfo.direction}. You received ${result.humanReceived.length} tile${result.humanReceived.length === 1 ? '' : 's'}.${blindNote}`,
     });
 
-    setCharlestonReceivedCount(3);
+    setCharlestonReceivedCount(result.humanReceived.length);
     setCharlestonSelected([]);
 
     // Decide next sub-phase
@@ -671,7 +669,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       setCharlestonSubPhase('passed');
       schedulePendingAction('charleston-next-pass', CHARLESTON_PASS_DELAY_MS);
     }
-  }, [isPaused, charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, schedulePendingAction]);
+  }, [isPaused, game, charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, config.botSkillLevel, schedulePendingAction]);
 
   // Courtesy pass handler
   const handleCourtesyPass = useCallback(() => {
@@ -681,57 +679,21 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       startPlaying();
       return;
     }
-    const oppositeIndex = getPassTarget(0, 'across', config.playerCount);
-    if (oppositeIndex < 0) {
-      setGame(prev => {
-        const result = executeCharlestonPass(
-          prev.players,
-          0,
-          oppositeIndex,
-          charlestonSelected,
-          'across',
-          config.playerCount,
-          prev.wall
-        );
-        return {
-          ...prev,
-          players: result.players,
-          wall: result.wall ?? prev.wall,
-        };
-      });
-      setCharlestonSelected([]);
-      schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
-      return;
-    }
-
-    setGame(prev => {
-      const newPlayers = prev.players.map(p => ({ ...p, hand: [...p.hand] }));
-
-      // Human's selected tiles
-      const humanTiles = charlestonSelected.map(idx => newPlayers[0].hand[idx]);
-
-      // AI selects same number of tiles to exchange
-      const aiCandidates = aiSelectCharlestonTiles(newPlayers[oppositeIndex].hand);
-      const aiIndices = aiCandidates.slice(0, charlestonSelected.length);
-      const aiTiles = aiIndices.map(idx => newPlayers[oppositeIndex].hand[idx]);
-
-      // Remove from both hands
-      const humanPassedIds = new Set(humanTiles.map(t => t.id));
-      newPlayers[0].hand = newPlayers[0].hand.filter(t => !humanPassedIds.has(t.id));
-
-      const aiPassedIds = new Set(aiTiles.map(t => t.id));
-      newPlayers[oppositeIndex].hand = newPlayers[oppositeIndex].hand.filter(t => !aiPassedIds.has(t.id));
-
-      // Swap
-      newPlayers[0].hand.push(...aiTiles);
-      newPlayers[oppositeIndex].hand.push(...humanTiles);
-
-      return { ...prev, players: newPlayers };
+    // Each side names 0–3 tiles; the pair trades the smaller number.
+    const result = executeCourtesyPass(game.players, charlestonSelected, config.playerCount, game.wall, config.botSkillLevel);
+    const partnerName = result.partnerIndex >= 0 ? game.players[result.partnerIndex].name : 'the pile';
+    const offered = charlestonSelected.length;
+    setGame({
+      ...game,
+      players: result.players,
+      wall: result.wall ?? game.wall,
+      message: result.exchanged === offered
+        ? `Courtesy pass: traded ${result.exchanged} tile${result.exchanged === 1 ? '' : 's'} with ${partnerName}.`
+        : `Courtesy pass: ${partnerName} offered only ${result.exchanged}, so you traded ${result.exchanged} and kept the rest.`,
     });
-
     setCharlestonSelected([]);
     schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
-  }, [isPaused, charlestonSelected, config.playerCount, schedulePendingAction, startPlaying]);
+  }, [isPaused, game, charlestonSelected, config.playerCount, config.botSkillLevel, schedulePendingAction, startPlaying]);
 
   const handleContinueCharleston = useCallback(() => {
     if (isPaused) return;
@@ -912,6 +874,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   onEnd={handleEndCharleston}
                   onCourtesyPass={handleCourtesyPass}
                   onCourtesySkip={startPlaying}
+                  blindAllowed={isBlindPassStep(charlestonStep, config.playerCount)}
+                  lastPassNote={/^(Passed|Courtesy pass)/.test(game.message) ? game.message : undefined}
                   DirectionIcon={DirectionIcon}
                 />
               ) : (
@@ -1077,6 +1041,19 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                                   </button>
                                 ))}
                               </div>
+                              {callCoaching.length > 0 && (
+                                <div className="flex flex-col gap-0.5 mt-1" style={{ maxWidth: 240 }}>
+                                  {callCoaching.map(a => (
+                                    <p key={a.size} style={{
+                                      fontSize: '0.55rem', lineHeight: 1.35,
+                                      color: !a.fits ? '#E8A39D' : a.improves ? '#8BB59E' : 'rgba(255,253,247,0.6)',
+                                    }}>
+                                      <Lightbulb size={8} className="inline mr-1" style={{ verticalAlign: 'middle' }} />
+                                      {a.message}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                           <button onClick={handleIgnore}
@@ -1774,6 +1751,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           onSettings={onBackToSetup}
           planHands={planHands}
           isSiamese={siamese}
+          winInfo={game.winInfo}
         />
       )}
     </div>
@@ -1797,6 +1775,8 @@ function CharlestonUI({
   onCourtesyPass,
   onCourtesySkip,
   DirectionIcon,
+  blindAllowed = false,
+  lastPassNote,
 }: {
   subPhase: string;
   stepInfo: { direction: string; label: string; group: string };
@@ -1812,9 +1792,16 @@ function CharlestonUI({
   onCourtesyPass: () => void;
   onCourtesySkip: () => void;
   DirectionIcon: React.ElementType;
+  blindAllowed?: boolean;
+  lastPassNote?: string;
 }) {
+  const canPass = subPhase !== 'passed' && (charlestonSelected.length === 3 || (blindAllowed && charlestonSelected.length < 3));
+  const blindCount = 3 - charlestonSelected.length;
   return (
     <div className="flex flex-col items-center gap-3 w-full max-w-md">
+      {lastPassNote && subPhase !== 'pre' && subPhase !== 'selecting' && (
+        <p className="text-center" style={{ color: '#8BB59E', fontSize: '0.65rem' }}>{lastPassNote}</p>
+      )}
       {subPhase === 'pre' && (
         <div className="rounded-lg p-5 text-center" style={{
           background: 'rgba(0,0,0,0.35)',
@@ -1955,25 +1942,26 @@ function CharlestonUI({
                 fontSize: '0.65rem',
               }}>
                 {subPhase === 'passed'
-                  ? 'Tiles passed! Received 3 new tiles.'
+                  ? 'Tiles passed!'
                   : `${charlestonSelected.length}/3 tiles selected`}
               </span>
             </div>
 
             <button
               onClick={onPass}
-              disabled={charlestonSelected.length !== 3 || subPhase === 'passed'}
+              disabled={!canPass}
               className="px-5 py-1.5 rounded uppercase tracking-wider transition-all"
+              title={blindAllowed && blindCount > 0 ? `Pass ${charlestonSelected.length} of yours and ${blindCount} unseen from the tiles coming to you` : undefined}
               style={{
-                background: charlestonSelected.length === 3 && subPhase !== 'passed' ? '#B5704F' : 'rgba(255,253,247,0.08)',
-                color: charlestonSelected.length === 3 && subPhase !== 'passed' ? '#FFFDF7' : 'rgba(255,253,247,0.3)',
+                background: canPass ? '#B5704F' : 'rgba(255,253,247,0.08)',
+                color: canPass ? '#FFFDF7' : 'rgba(255,253,247,0.3)',
                 fontSize: '0.7rem',
                 fontWeight: 600,
-                cursor: charlestonSelected.length === 3 && subPhase !== 'passed' ? 'pointer' : 'default',
-                boxShadow: charlestonSelected.length === 3 && subPhase !== 'passed' ? '0 2px 8px rgba(181,112,79,0.4)' : 'none',
+                cursor: canPass ? 'pointer' : 'default',
+                boxShadow: canPass ? '0 2px 8px rgba(181,112,79,0.4)' : 'none',
               }}
             >
-              Pass Tiles
+              {blindAllowed && blindCount > 0 ? `Blind Pass (${blindCount} unseen)` : 'Pass Tiles'}
             </button>
           </div>
 
@@ -1984,7 +1972,9 @@ function CharlestonUI({
           }}>
             {subPhase === 'passed'
               ? 'Preparing next pass...'
-              : 'Click tiles in your hand below to select them for passing'}
+              : blindAllowed
+                ? 'Last pass of this Charleston: select up to 3 — any you leave out are passed on, unseen, from the tiles coming to you'
+                : 'Click tiles in your hand below to select them for passing'}
           </p>
         </div>
       )}

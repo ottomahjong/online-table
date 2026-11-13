@@ -306,30 +306,34 @@ describe('Phase-aware advice', () => {
     }
   });
 
-  it('Mid game: defensive flag on tile that completes an opponent exposure', () => {
-    // Opponent exposed three 5-Crak. If we hold a 5-Crak, it should be flagged.
+  it('Reading exposures: flags a spare tile the opponent\'s possible hands still need', () => {
+    // Exposures can't grow (a pung stays a pung), so the danger is not "completing"
+    // an exposure — it's feeding a line the exposures still fit. An opponent with
+    // kongs of North and South can only be on NNNN EEE WWW SSSS or NNNN 1 11 111 SSSS,
+    // so a lone West Wind that our 2468 hand doesn't use is risky, not a free discard.
+    const west = wind('west');
     const hand: Tile[] = [
-      suited('crak', 5),                         // dangerous to discard
-      suited('bam', 1), suited('bam', 2), suited('bam', 3),
-      suited('dot', 7), suited('dot', 8), suited('dot', 9),
-      suited('crak', 1), suited('crak', 2), suited('crak', 3),
-      flower(), flower(),
-      suited('bam', 9), suited('bam', 9),
+      suited('bam', 2), suited('bam', 2), suited('bam', 2),
+      suited('bam', 4), suited('bam', 4), suited('bam', 4), suited('bam', 4),
+      suited('bam', 6), suited('bam', 6), suited('bam', 6),
+      suited('bam', 8), suited('bam', 8), suited('bam', 8),
+      west,
     ];
     const result = analyze(makeGame({
       hand,
-      wallSize: 50,
+      wallSize: 60,
       opponents: [{
-        exposures: [[suited('crak', 5), suited('crak', 5), suited('crak', 5)]],
+        exposures: [
+          [wind('north'), wind('north'), wind('north'), wind('north')],
+          [wind('south'), wind('south'), wind('south'), wind('south')],
+        ],
       }],
     }), 0);
-    expect(result.phase === 'mid' || result.phase === 'end').toBe(true);
-    // 5-Crak in our hand should not be marked DISCARD; should be WATCH (danger)
-    const crak5 = hand.find(t => t.type === 'suited' && t.suit === 'crak' && t.value === 5)!;
-    const adv = adviceFor(result, crak5.id);
-    expect(adv!.action).not.toBe('DISCARD');
-    // either WATCH+danger or KEEP (if it contributes), but not DISCARD
-    if (adv!.action === 'WATCH') expect(adv!.danger).toBe(true);
+    expect(result.phase).toBe('end');
+    const adv = adviceFor(result, west.id)!;
+    expect(adv.action).toBe('WATCH');
+    expect(adv.danger).toBe(true);
+    expect(result.warnings.some(w => w.includes('NNNN'))).toBe(true);
   });
 });
 

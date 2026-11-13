@@ -120,6 +120,16 @@ export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTil
           </div>
         ) : (
           <>
+            {result.handDead && (
+              <div className="mx-4 mt-3 px-3 py-2 rounded flex items-start gap-2" style={{ background: 'rgba(196,69,62,0.1)', border: `1px solid ${C.red}55` }}>
+                <AlertTriangle size={13} style={{ color: C.red, marginTop: 1 }} />
+                <span style={{ fontSize: '0.72rem', color: C.navy, lineHeight: 1.4 }}>
+                  Dead hand — no line on the card can still be completed.{' '}
+                  <button onClick={() => setGlossaryKey('dead-hand')} className="underline" style={{ color: C.terracotta }}>Why?</button>
+                </span>
+              </div>
+            )}
+
             {/* Teaching note */}
             <Section
               title="Teaching Note"
@@ -291,11 +301,16 @@ function CandidateCard({
           <span style={{ color: C.navy, fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.04em' }}>
             {c.handName}
           </span>
+          <span style={{ color: C.warmGray, fontSize: '0.55rem' }} title={`Card line ${c.handId}`}>
+            {c.handName !== c.cardLine ? `(${c.cardLine})` : ''}
+          </span>
         </div>
         <FeasibilityBar value={c.feasibility} />
       </div>
       <div className="flex items-center gap-1 flex-wrap mb-1">
-        <Tag label={c.section} color={C.green} />
+        <Tag label={c.sectionName} color={C.green} />
+        <Tag label={`${c.points} pts`} color={C.navy} />
+        {c.missing > 0 && <Tag label={`${c.missing} away`} color={C.warmGray} />}
         <Tag label={c.concealed ? 'Concealed' : 'Exposable'} color={c.concealed ? C.terracotta : C.sage} />
         {c.pairsHeld > 0 && <Tag label={`${c.pairsHeld} pair${c.pairsHeld === 1 ? '' : 's'} held`} color={C.green} />}
         {c.pairsNeeded > 0 && <Tag label={`Needs ${c.pairsNeeded} pair${c.pairsNeeded === 1 ? '' : 's'}`} color={C.warmGray} />}
