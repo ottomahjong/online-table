@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { canClaimMahJonggOnDiscard, checkSimpleWin, claimMahJonggOnDiscard, createGame, declareMahJongg, getCallOptions } from './gameLogic';
+import { canClaimMahjongOnDiscard, checkSimpleWin, claimMahjongOnDiscard, createGame, declareMahjong, getCallOptions } from './gameLogic';
 import type { GameState, Player, Tile, Suit } from './types';
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ describe('2025 card clarifications', () => {
 });
 
 describe('discard claim rules', () => {
-  it('allows claiming Mah Jongg on a discard for a concealed singles-and-pairs hand', () => {
+  it('allows claiming Mahjong on a discard for a concealed singles-and-pairs hand', () => {
     const playerHand: Tile[] = [
       flower(), flower(),
       suited('bam', 2), dragon('soap'), suited('bam', 2),
@@ -387,9 +387,9 @@ describe('discard claim rules', () => {
     });
 
     expect(getCallOptions(state, 0)).toEqual([]);
-    expect(canClaimMahJonggOnDiscard(state, 0)).toBe(true);
+    expect(canClaimMahjongOnDiscard(state, 0)).toBe(true);
 
-    const resolved = claimMahJonggOnDiscard(state, 0);
+    const resolved = claimMahjongOnDiscard(state, 0);
     expect(resolved.phase).toBe('gameOver');
     expect(resolved.winner).toBe(0);
     expect(resolved.discardPool).toHaveLength(0);
@@ -412,7 +412,7 @@ describe('discard claim rules', () => {
     });
 
     expect(getCallOptions(state, 0)).toEqual([]);
-    expect(canClaimMahJonggOnDiscard(state, 0)).toBe(false);
+    expect(canClaimMahjongOnDiscard(state, 0)).toBe(false);
   });
 });
 
@@ -464,7 +464,7 @@ describe('mode-specific setup rules', () => {
       lastDiscardedBy: null,
     });
 
-    const resolved = declareMahJongg(state, 0);
+    const resolved = declareMahjong(state, 0);
     expect(resolved.phase).toBe('playing');
     expect(resolved.players[0].rack1Locked).toBe(true);
     expect(resolved.players[0].rack2Locked).toBe(false);

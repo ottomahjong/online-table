@@ -41,7 +41,7 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
 
   const modeSummary = {
     1: 'Solo practice deals 13 tiles, runs a solo Charleston against the remaining pile, then continues as draw-and-discard practice.',
-    2: 'Two-player uses Siamese rules: no Charleston, 28/27 tile deal, two racks per player, and both racks must eventually Mah Jongg to win.',
+    2: 'Two-player uses Siamese rules: no Charleston, 28/27 tile deal, two racks per player, and both racks must eventually Mahjong to win.',
     3: 'Three-player uses the official NMJL flow here: no Charleston, no courtesy pass, East discards to begin play.',
     4: 'Four-player uses the standard Charleston and full table flow.',
   }[playerCount];

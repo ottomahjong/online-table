@@ -74,7 +74,7 @@ export interface GameState {
   turnSource?: 'draw' | 'call';
   /** Who discarded the tile the current player called (when turnSource is 'call'). */
   lastCallFrom?: number | null;
-  /** True when the current player's last action was a joker exchange (a Mah Jongg then counts as self-drawn). */
+  /** True when the current player's last action was a joker exchange (a Mahjong then counts as self-drawn). */
   lastActionWasJokerExchange?: boolean;
   /** Set when someone wins: the hand, its value, and who pays what. */
   winInfo?: WinInfo | null;

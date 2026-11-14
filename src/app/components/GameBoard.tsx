@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
+import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahjong, canClaimMahjongOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
@@ -167,7 +167,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   }, []);
 
   // The window closed (or the human passed): bots claim by the rules —
-  // Mah Jongg first, then exposures, next-in-turn breaking ties.
+  // Mahjong first, then exposures, next-in-turn breaking ties.
   const resolveCallingPhase = useCallback(() => {
     setGame(prev => resolveDiscardClaims(prev, null));
   }, []);
@@ -464,15 +464,15 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => {
       const size = groupSize ?? getCallOptions(prev, 0)[0]?.size;
       if (size === undefined) return prev;
-      // A bot's Mah Jongg, or an earlier-in-turn bot call, still outranks this.
+      // A bot's Mahjong, or an earlier-in-turn bot call, still outranks this.
       return resolveDiscardClaims(prev, { kind: 'expose', size });
     });
   }, [isPaused, clearPendingAction]);
 
-  const handleClaimMahJongg = useCallback(() => {
+  const handleClaimMahjong = useCallback(() => {
     if (isPaused) return;
     clearPendingAction();
-    setGame(prev => resolveDiscardClaims(prev, { kind: 'mahjongg' }));
+    setGame(prev => resolveDiscardClaims(prev, { kind: 'mahjong' }));
   }, [isPaused, clearPendingAction]);
 
   // Handle ignoring a discarded tile
@@ -575,10 +575,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => swapTileBetweenRacks(prev, 0, fromRack, tileIndex));
   }, [isPaused, game.players]);
 
-  // Declare Mah Jongg
-  const handleDeclareMahJongg = useCallback(() => {
+  // Declare Mahjong
+  const handleDeclareMahjong = useCallback(() => {
     if (isPaused) return;
-    setGame(prev => declareMahJongg(prev, 0));
+    setGame(prev => declareMahjong(prev, 0));
   }, [isPaused]);
 
   const hasPlanHands = planHands.some(p => p !== null);
@@ -595,7 +595,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const callCoaching = tipsEnabled && humanCanCall
     ? humanCallOptions.map(o => assessCall(game, 0, o.size)).filter((a): a is NonNullable<typeof a> => a !== null)
     : [];
-  const humanCanClaimDiscardMahJongg = isCallingPhase ? canClaimMahJonggOnDiscard(game, 0) : false;
+  const humanCanClaimDiscardMahjong = isCallingPhase ? canClaimMahjongOnDiscard(game, 0) : false;
   const hasSkippableWait = !!pendingAction && !isPaused && (
     pendingAction.kind === 'call-window' ||
     pendingAction.kind === 'human-draw' ||
@@ -1007,9 +1007,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           }}>{callCountdown ?? 0}</span>
                         </div>
                         <div className="flex flex-col gap-1.5">
-                          {humanCanClaimDiscardMahJongg && (
+                          {humanCanClaimDiscardMahjong && (
                             <button
-                              onClick={handleClaimMahJongg}
+                              onClick={handleClaimMahjong}
                               className="px-4 py-2 rounded transition-all uppercase tracking-wider hover:brightness-110"
                               style={{
                                 background: '#2D6A4F',
@@ -1020,7 +1020,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                                 lineHeight: 1.1,
                               }}
                             >
-                              Mah Jongg!
+                              Mahjong!
                             </button>
                           )}
                           {humanCanCall && (
@@ -1259,13 +1259,13 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   if (game.phase === 'gameOver') {
                     handleNewGame();
                   } else if (game.phase === 'playing') {
-                    handleDeclareMahJongg();
+                    handleDeclareMahjong();
                   }
                 }}
               >
                 {game.phase === 'gameOver'
                   ? (game.winner === 0 ? 'You Win!' : 'Game Over')
-                  : 'Mah Jongg!'}
+                  : 'Mahjong!'}
               </button>
             </div>
 
@@ -1323,7 +1323,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           background: 'rgba(45,106,79,0.12)',
                           color: '#2D6A4F',
                         }}>
-                          Mah Jongg locked
+                          Mahjong locked
                         </span>
                       )}
                       <span className="text-[0.45rem] px-1.5 py-0.5 rounded" style={{
@@ -1727,7 +1727,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Claiming Discards</p>
                 <p>When an opponent discards, you have <strong style={{ color: '#1B2A4A' }}>{callWindowSeconds} seconds</strong> to claim. You can use matching tiles and/or Jokers from your hand to form the group.</p>
                 <p><strong style={{ color: '#1B2A4A' }}>Group sizes:</strong> Choose Pung (3), Kong (4), Quint (5), or Sextet (6) when calling. Each button shows how many Jokers will be used.</p>
-                <p><strong style={{ color: '#1B2A4A' }}>Priority:</strong> Mah Jongg claims always beat exposure claims. For equal claims, next-in-turn has preference.</p>
+                <p><strong style={{ color: '#1B2A4A' }}>Priority:</strong> Mahjong claims always beat exposure claims. For equal claims, next-in-turn has preference.</p>
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
@@ -1738,9 +1738,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Winning</p>
-                <p>Declare <strong style={{ color: '#1B2A4A' }}>Mah Jongg</strong> when your hand matches a pattern on the NMJL card. Any tile except a Joker may be called for Mah Jongg.</p>
+                <p>Declare <strong style={{ color: '#1B2A4A' }}>Mahjong</strong> when your hand matches a pattern on the NMJL card. Any tile except a Joker may be called for Mahjong.</p>
                 {config.playerCount === 2 && (
-                  <p>In Siamese, you can lock a completed rack with Mah Jongg and keep playing the other rack. You win the game once both racks are complete.</p>
+                  <p>In Siamese, you can lock a completed rack with Mahjong and keep playing the other rack. You win the game once both racks are complete.</p>
                 )}
                 <p>Click <BookOpen size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> in the top bar to view the NMJL reference card and plan hands.</p>
               </div>

@@ -1,4 +1,4 @@
-// Rules-correct hand matching for American Mah Jongg (NMJL-style).
+// Rules-correct hand matching for American Mahjong (NMJL-style).
 //
 // Rules applied here:
 //  • A 0 on the card is a White Dragon, and a White Dragon used as 0 has no suit.
@@ -388,7 +388,7 @@ export function computeAvailability(state: GameState, playerIndex: number): Avai
 }
 
 /**
- * How far a plan is from Mah Jongg, as a number of tiles plus small penalties.
+ * How far a plan is from Mahjong, as a number of tiles plus small penalties.
  * Infinity when the plan can no longer be completed with the tiles still out.
  */
 export function progressCost(p: Progress, avail?: Availability): number {

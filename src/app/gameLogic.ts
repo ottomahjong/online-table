@@ -318,7 +318,7 @@ export function drawTile(state: GameState): GameState {
         winner: state.currentPlayerIndex,
         winInfo: buildWinInfo(state, newPlayers, state.currentPlayerIndex, true, null),
         message: isHuman
-          ? 'Mah Jongg! Both hands complete — You win!'
+          ? 'Mahjong! Both hands complete — You win!'
           : `${currentPlayer.name} wins with both hands complete!`,
       };
     }
@@ -332,8 +332,8 @@ export function drawTile(state: GameState): GameState {
       winner: state.currentPlayerIndex,
       winInfo: buildWinInfo(state, newPlayers, state.currentPlayerIndex, true, null),
       message: isHuman
-        ? 'Mah Jongg! You win!'
-        : `${currentPlayer.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${currentPlayer.name} wins with Mahjong!`,
     };
   }
 
@@ -424,7 +424,7 @@ export interface CallOption {
   jokersUsed: number;
 }
 
-function getDiscardMahJonggRack(state: GameState, playerIndex: number): 1 | 2 | null {
+function getDiscardMahjongRack(state: GameState, playerIndex: number): 1 | 2 | null {
   if (state.phase !== 'playing') return null;
   if (state.turnPhase !== 'calling') return null;
   if (state.lastDiscarded === null) return null;
@@ -453,8 +453,8 @@ function getDiscardMahJonggRack(state: GameState, playerIndex: number): 1 | 2 | 
   return checkSimpleWin(candidatePlayer) ? 1 : null;
 }
 
-export function canClaimMahJonggOnDiscard(state: GameState, playerIndex: number): boolean {
-  return getDiscardMahJonggRack(state, playerIndex) !== null;
+export function canClaimMahjongOnDiscard(state: GameState, playerIndex: number): boolean {
+  return getDiscardMahjongRack(state, playerIndex) !== null;
 }
 
 /**
@@ -595,8 +595,8 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
       lastDiscardedBy: null,
       selectedTileIndex: null,
       message: updatedPlayer.isHuman
-        ? 'Mah Jongg! You win!'
-        : `${updatedPlayer.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${updatedPlayer.name} wins with Mahjong!`,
     };
   }
 
@@ -621,8 +621,8 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
   };
 }
 
-export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): GameState {
-  const winningRack = getDiscardMahJonggRack(state, playerIndex);
+export function claimMahjongOnDiscard(state: GameState, playerIndex: number): GameState {
+  const winningRack = getDiscardMahjongRack(state, playerIndex);
   if (winningRack === null) {
     return state;
   }
@@ -648,8 +648,8 @@ export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): G
       lastDiscardedBy: null,
       selectedTileIndex: null,
       message: player.isHuman
-        ? 'Mah Jongg! You claimed the discard and win!'
-        : `${player.name} called Mah Jongg on the discard!`,
+        ? 'Mahjong! You claimed the discard and win!'
+        : `${player.name} called Mahjong on the discard!`,
     };
   }
 
@@ -665,8 +665,8 @@ export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): G
     selectedTileIndex: null,
     activeRack: getPlayableRack(updatedPlayer, winningRack === 1 ? 2 : 1),
     message: player.isHuman
-      ? `Rack ${winningRack} is locked with Mah Jongg. Continue building the other rack.`
-      : `${player.name} locked rack ${winningRack} with Mah Jongg.`,
+      ? `Rack ${winningRack} is locked with Mahjong. Continue building the other rack.`
+      : `${player.name} locked rack ${winningRack} with Mahjong.`,
   };
 }
 
@@ -819,11 +819,11 @@ function checkSiameseWin(player: Player): boolean {
   return checkSimpleWin(player) && checkSimpleWin({ ...player, hand: player.hand2, exposures: player.exposures2 });
 }
 
-export function declareMahJongg(state: GameState, playerIndex: number): GameState {
+export function declareMahjong(state: GameState, playerIndex: number): GameState {
   if (state.phase !== 'playing') return state;
   // Human must be in the discarding phase (i.e., they have a full hand after drawing)
   if (state.currentPlayerIndex !== playerIndex) return { ...state, message: "It's not your turn." };
-  if (state.turnPhase !== 'discarding') return { ...state, message: 'You can only declare Mah Jongg when it is your turn to discard.' };
+  if (state.turnPhase !== 'discarding') return { ...state, message: 'You can only declare Mahjong when it is your turn to discard.' };
 
   const player = state.players[playerIndex];
   const siamese = isSiameseMode(state);
@@ -845,7 +845,7 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
         winInfo: buildWinInfo(state, state.players, playerIndex, selfDrawn, discarder),
         selectedTileIndex: null,
         message: player.isHuman
-          ? 'Mah Jongg! Both hands complete — You win!'
+          ? 'Mahjong! Both hands complete — You win!'
           : `${player.name} wins with both hands complete!`,
       };
     }
@@ -868,8 +868,8 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
       selectedTileIndex: null,
       activeRack: getPlayableRack(updatedPlayer, otherRack),
       message: player.isHuman
-        ? `Rack ${rackToLock} is locked with Mah Jongg. Build the other rack to win both hands.`
-        : `${player.name} locked rack ${rackToLock} with Mah Jongg.`,
+        ? `Rack ${rackToLock} is locked with Mahjong. Build the other rack to win both hands.`
+        : `${player.name} locked rack ${rackToLock} with Mahjong.`,
     };
   }
 
@@ -882,8 +882,8 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
       winInfo: buildWinInfo(state, state.players, playerIndex, selfDrawn, discarder),
       selectedTileIndex: null,
       message: player.isHuman
-        ? 'Mah Jongg! You win!'
-        : `${player.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${player.name} wins with Mahjong!`,
     };
   }
 
@@ -892,7 +892,7 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
 
 // ─── AI Turn ────────────────────────────────────────────────────────
 // Bots plan against the card (see aiStrategy): exchange jokers when that
-// doesn't hurt their best plans, declare Mah Jongg when complete, otherwise
+// doesn't hurt their best plans, declare Mahjong when complete, otherwise
 // discard the tile their plans need least.
 
 /** Swap naturals for exposed jokers while that keeps or improves the bot's best plan. */
@@ -934,7 +934,7 @@ export function aiTurn(state: GameState): GameState {
 
   let current = aiExchangeJokers(state, state.currentPlayerIndex);
   if (current !== state && checkSimpleWin(current.players[current.currentPlayerIndex])) {
-    const won = declareMahJongg(current, current.currentPlayerIndex);
+    const won = declareMahjong(current, current.currentPlayerIndex);
     if (won.phase === 'gameOver') return won;
   }
 
@@ -991,11 +991,11 @@ export function aiShouldCall(state: GameState, playerIndex: number): CallGroupSi
 
 export type HumanClaim =
   | null
-  | { kind: 'mahjongg' }
+  | { kind: 'mahjong' }
   | { kind: 'expose'; size: CallGroupSize };
 
 /**
- * Resolve everyone's claims on the current discard. Mah Jongg beats any
+ * Resolve everyone's claims on the current discard. Mahjong beats any
  * exposure; between equal claims, whoever is next in turn after the
  * discarder wins. The human (player 0) is never claimed for automatically —
  * their choice is `humanClaim` (null = pass).
@@ -1012,7 +1012,7 @@ export function resolveDiscardClaims(state: GameState, humanClaim: HumanClaim = 
     if (!humanClaim || who === 0) return next;
     const name = state.players[who].name;
     const why = next.phase === 'gameOver'
-      ? `${name} claimed it for Mah Jongg, which beats any other call.`
+      ? `${name} claimed it for Mahjong, which beats any other call.`
       : `${name} is ahead of you in turn order, so their call came first.`;
     return { ...next, message: `${next.message} ${why}` };
   };
@@ -1020,10 +1020,10 @@ export function resolveDiscardClaims(state: GameState, humanClaim: HumanClaim = 
   for (const i of order) {
     const p = state.players[i];
     if (p.isHuman) {
-      if (humanClaim?.kind === 'mahjongg' && canClaimMahJonggOnDiscard(state, i)) return claimMahJonggOnDiscard(state, i);
+      if (humanClaim?.kind === 'mahjong' && canClaimMahjongOnDiscard(state, i)) return claimMahjongOnDiscard(state, i);
       continue;
     }
-    if (canClaimMahJonggOnDiscard(state, i)) return outranked(claimMahJonggOnDiscard(state, i), i);
+    if (canClaimMahjongOnDiscard(state, i)) return outranked(claimMahjongOnDiscard(state, i), i);
   }
 
   for (const i of order) {

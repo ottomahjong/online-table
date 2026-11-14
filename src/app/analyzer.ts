@@ -1,4 +1,4 @@
-// Strategy trainer for American Mah Jongg (NMJL). Pure functions, no UI.
+// Strategy trainer for American Mahjong (NMJL). Pure functions, no UI.
 //
 // Built on the same matcher the engine uses (handMatcher), so its advice
 // follows the real rules: exposures must be whole card groups, jokers only in
@@ -215,7 +215,7 @@ function buildCandidate(plan: RankedPlan, avail: Availability, racingKeys: Set<s
 
 function composeReasoning(c: CandidateHand): string {
   const parts: string[] = [];
-  if (c.missing === 0) parts.push('This hand is complete — declare Mah Jongg!');
+  if (c.missing === 0) parts.push('This hand is complete — declare Mahjong!');
   else parts.push(`${c.missing} tile${c.missing === 1 ? '' : 's'} away (${c.sectionName}, ${c.points} points).`);
   if (c.jokersUsable > 0) parts.push(`${c.jokersUsable} of your Jokers already have a home in it.`);
   if (c.pairsNeeded === 0 && c.pairsHeld > 0) {
@@ -224,7 +224,7 @@ function composeReasoning(c: CandidateHand): string {
     parts.push(`It still needs ${c.pairsNeeded} pair${c.pairsNeeded === 1 ? '' : 's'}, and a Joker can't fill a pair.`);
   }
   parts.push(c.concealed
-    ? 'Concealed (C): you must draw every tile yourself — you can only call a discard for Mah Jongg.'
+    ? 'Concealed (C): you must draw every tile yourself — you can only call a discard for Mahjong.'
     : 'Exposed (X): you can call discards to complete its pungs and kongs.');
   if (c.fading) parts.push('Fading: a tile it needs is nearly gone, or an opponent is collecting the same tiles.');
   return parts.join(' ');
@@ -514,7 +514,7 @@ function composeTeachingNote(
     return 'No line on the card fits your exposures with the tiles still out — your hand is dead. Switch to defense: discard tiles your opponents are unlikely to need.';
   }
   if (top.length === 0) return 'No clear hand yet — keep your options open and let go of tiles that fit nothing.';
-  if (top[0].missing === 0) return `Your hand is complete: ${top[0].cardLine} (${top[0].points} points). Declare Mah Jongg!`;
+  if (top[0].missing === 0) return `Your hand is complete: ${top[0].cardLine} (${top[0].points} points). Declare Mahjong!`;
 
   const noFit = advice.filter(a => a.contributesTo.length === 0 && !isJoker(a.tile)).length;
   if (phase === 'charleston' && noFit >= 3) {
@@ -589,7 +589,7 @@ export function assessCall(game: GameState, playerIndex: number, size: CallGroup
   const missing = best.progress.missing;
   return {
     size, fits: true, improves,
-    message: `Fits "${best.pattern.label}" (${best.pattern.points} pts) — ${missing === 0 ? 'Mah Jongg!' : `${missing} tile${missing === 1 ? '' : 's'} away after the call`}.${improves ? '' : ' It doesn\'t bring you closer than you are now.'}${gaveUp}`,
+    message: `Fits "${best.pattern.label}" (${best.pattern.points} pts) — ${missing === 0 ? 'Mahjong!' : `${missing} tile${missing === 1 ? '' : 's'} away after the call`}.${improves ? '' : ' It doesn\'t bring you closer than you are now.'}${gaveUp}`,
   };
 }
 
@@ -600,7 +600,7 @@ export function assessCall(game: GameState, playerIndex: number, size: CallGroup
 export const GLOSSARY: Record<string, { title: string; body: string }> = {
   'pair-preservation': {
     title: 'Pair Preservation',
-    body: 'A pair is two identical tiles. Jokers can never be used in a pair (or a single, or a run like NEWS or 2025), and you can\'t call a discard to make one — except for Mah Jongg. So the second tile of a pair is often the hardest tile to get. Protect the pairs your hand needs.',
+    body: 'A pair is two identical tiles. Jokers can never be used in a pair (or a single, or a run like NEWS or 2025), and you can\'t call a discard to make one — except for Mahjong. So the second tile of a pair is often the hardest tile to get. Protect the pairs your hand needs.',
   },
   'joker-never-discard': {
     title: 'Jokers',
@@ -644,7 +644,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   'concealed-vs-exposed': {
     title: 'Concealed vs. Exposed',
-    body: 'Lines marked C must be concealed: you can call a discard only for Mah Jongg. Lines marked X let you call discards for pungs, kongs and quints, which is faster but shows your plan.',
+    body: 'Lines marked C must be concealed: you can call a discard only for Mahjong. Lines marked X let you call discards for pungs, kongs and quints, which is faster but shows your plan.',
   },
   'dead-hand': {
     title: 'Dead Hand',

@@ -392,7 +392,7 @@ export function GameOverModal({ winner, players, isDraw, onPlayAgain, onSettings
               {isDraw
                 ? 'Draw Game'
                 : humanWon
-                  ? (isSiamese ? 'Double Mah Jongg!' : 'Mah Jongg!')
+                  ? (isSiamese ? 'Double Mahjong!' : 'Mahjong!')
                   : `${winnerPlayer?.name} Wins`}
             </h2>
 

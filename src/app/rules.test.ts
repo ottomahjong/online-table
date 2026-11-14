@@ -1,11 +1,11 @@
 /**
- * American Mah Jongg (NMJL-style) rules, one test per rule the engine enforces.
+ * American Mahjong (NMJL-style) rules, one test per rule the engine enforces.
  * Rule wording follows the American ruleset document used for this game.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   checkSimpleWin, findWinningHandMatch, getCallOptions, resolveDiscardClaims,
-  findValidJokerExchanges, executeJokerExchange, declareMahJongg, buildWinInfo,
+  findValidJokerExchanges, executeJokerExchange, declareMahjong, buildWinInfo,
   executeCharlestonRound, executeCourtesyPass, createGame, drawTile, aiTurn,
 } from './gameLogic';
 import { chooseDiscard, chooseCall } from './aiStrategy';
@@ -158,7 +158,7 @@ describe('Scoring', () => {
 // ─── Calling discards ──────────────────────────────────────────────────
 
 describe('Claims on a discard', () => {
-  /** Player 1 discards a 2 Bam; player 0 (human) holds two 2 Bams; player 3 can Mah Jongg on it. */
+  /** Player 1 discards a 2 Bam; player 0 (human) holds two 2 Bams; player 3 can Mahjong on it. */
   function contested(): GameState {
     const discard = s('bam', 2);
     const g = state({ currentPlayerIndex: 1, turnPhase: 'calling', lastDiscarded: discard, lastDiscardedBy: 1, discardPool: [discard] });
@@ -167,12 +167,12 @@ describe('Claims on a discard', () => {
     return withPlayer(withPlayer(g, 0, { hand: human }), 3, { hand: p3 });
   }
 
-  it('Mah Jongg beats an exposure call, even from a player later in turn', () => {
+  it('Mahjong beats an exposure call, even from a player later in turn', () => {
     const r = resolveDiscardClaims(contested(), { kind: 'expose', size: 3 });
     expect(r.phase).toBe('gameOver');
     expect(r.winner).toBe(3);
     expect(r.winInfo?.discarderIndex).toBe(1);
-    expect(r.message).toMatch(/Mah Jongg, which beats any other call/);
+    expect(r.message).toMatch(/Mahjong, which beats any other call/);
   });
 
   it('never claims for the human: passing on a discard you could win with is your choice', () => {
@@ -180,7 +180,7 @@ describe('Claims on a discard', () => {
     let g = state({ currentPlayerIndex: 1, turnPhase: 'calling', lastDiscarded: discard, lastDiscardedBy: 1, discardPool: [discard] });
     g = withPlayer(g, 0, { hand: evenBams().slice(0, 13) });
     expect(resolveDiscardClaims(g, null).winner).toBeNull();
-    expect(resolveDiscardClaims(g, { kind: 'mahjongg' }).winner).toBe(0);
+    expect(resolveDiscardClaims(g, { kind: 'mahjong' }).winner).toBe(0);
   });
 });
 
@@ -202,7 +202,7 @@ describe('Joker exchange', () => {
     expect(executeJokerExchange(off, 2, 0, 2, 0)).toBe(off);
   });
 
-  it('Mah Jongg right after a joker exchange counts as self-drawn', () => {
+  it('Mahjong right after a joker exchange counts as self-drawn', () => {
     // Called a discard this turn, then exchanged for the joker that completes the hand.
     const hand = [...evenBams().slice(0, 13), s('crak', 5)];   // needs one more 8 Bam; holds a 5 Crak
     let g = state({ currentPlayerIndex: 0, turnPhase: 'discarding', turnSource: 'call', lastCallFrom: 3 });
@@ -210,7 +210,7 @@ describe('Joker exchange', () => {
     g = withPlayer(g, 2, { exposures: [[s('crak', 5), s('crak', 5), J()]] });
     const ex = executeJokerExchange(g, 2, 0, 2, 13);
     expect(ex.lastActionWasJokerExchange).toBe(true);
-    const won = declareMahJongg(ex, 0);
+    const won = declareMahjong(ex, 0);
     expect(won.phase).toBe('gameOver');
     expect(won.winInfo?.selfDrawn).toBe(true);
   });
@@ -294,7 +294,7 @@ describe('Computer players', () => {
   });
 
   it('call a discard only when the exposure brings a real hand closer', () => {
-    const hand = evenBams().slice(0, 13); // 222 4444 666 888 — one 8 Bam from Mah Jongg
+    const hand = evenBams().slice(0, 13); // 222 4444 666 888 — one 8 Bam from Mahjong
     expect(chooseCall(hand, [], s('bam', 8), [{ size: 4, matchUsed: 3, jokersUsed: 0 }], undefined, 5)).toBe(4);
     const nine = s('dot', 9);
     const withNines = [...hand.slice(0, 11), s('dot', 9), s('dot', 9)];
