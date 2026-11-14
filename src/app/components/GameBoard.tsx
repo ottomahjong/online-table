@@ -43,6 +43,14 @@ function isBlindPassStep(step: number, playerCount: number): boolean {
   return playerCount >= 3 && (step === 2 || step === 5);
 }
 
+// Player controls: every button shares one height and stays on one line.
+const CTRL_BTN = 'h-8 px-1.5 sm:px-2.5 shrink-0 rounded text-[0.6rem] uppercase tracking-wider whitespace-nowrap flex items-center justify-center gap-1 transition-all';
+// Width of each side-opponent column on phones: rack strip + seat label, and with an exposure column.
+const MOBILE_SIDE_COL = 30;
+const MOBILE_SIDE_COL_EXPOSED = 56;
+// Rack row height: lg tile (76) + room for a raised (selected) tile (14) + padding (16), so the bar never jumps.
+const RACK_ROW_MIN_HEIGHT = 106;
+
 interface GameBoardProps {
   config: GameConfig;
   onBackToSetup: () => void;
@@ -54,6 +62,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [showNMJL, setShowNMJL] = useState(false);
   const [showAnalyze, setShowAnalyze] = useState(false);
   const [analyzeHoverId, setAnalyzeHoverId] = useState<string | null>(null);
+  const rackScrollRef = useRef<HTMLDivElement | null>(null);
+  const discardPoolRef = useRef<HTMLDivElement | null>(null);
   const [callCountdown, setCallCountdown] = useState<number | null>(null);
   const [planHands, setPlanHands] = useState<(PlanHand | null)[]>([null, null, null]);
   const [playerBarHeight, setPlayerBarHeight] = useState(0);
@@ -75,6 +85,25 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [blankTradeMode, setBlankTradeMode] = useState<{ blankIndex: number } | null>(null);
   const [jokerExchangeMode, setJokerExchangeMode] = useState(false);
   const [jokerExchangeOptions, setJokerExchangeOptions] = useState<JokerExchangeOption[]>([]);
+
+  // Keep the newest discard in view.
+  useEffect(() => {
+    const el = discardPoolRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [game.discardPool.length]);
+
+  // Bring the tile Analyze is pointing at into view on the rack.
+  useEffect(() => {
+    if (!analyzeHoverId) return;
+    const el = rackScrollRef.current?.querySelector<HTMLElement>(`[data-tile-id="${analyzeHoverId}"]`);
+    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [analyzeHoverId]);
+
+  // Phones: both side columns take the same width (wider once either side has
+  // exposures), so the discard pool and call panel stay on the screen's centre axis.
+  const mobileSideWidth = config.playerCount !== 2 && [game.players[1], game.players[3]].some(p => p && p.exposures.length > 0)
+    ? MOBILE_SIDE_COL_EXPOSED
+    : MOBILE_SIDE_COL;
 
   const humanPlayer = game.players[0];
   const tilesRemaining = game.wall.length;
@@ -743,19 +772,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           >
             <RotateCcw size={14} />
           </button>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <span style={{
-            color: '#FFFDF7',
-            fontFamily: "'Futura', 'Trebuchet MS', sans-serif",
-            fontSize: '1.1rem',
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            lineHeight: 1,
-          }}>
-            Otto Online
+          {/* Your seat — lives here on phones so the controls row fits */}
+          <span className="sm:hidden px-2 py-0.5 rounded text-[0.6rem] uppercase" style={{
+            background: 'rgba(255,253,247,0.1)', color: '#FFFDF7', fontWeight: 600, letterSpacing: '0.08em',
+          }} title="Your seat">
+            {humanPlayer.seatWind}
           </span>
         </div>
 
@@ -763,12 +784,13 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           {canPauseGame && (
             <button
               onClick={handlePauseToggle}
-              className="px-3 py-1 rounded text-[0.65rem] uppercase tracking-wider transition-colors hover:bg-white/10 flex items-center gap-1.5"
+              className="px-2 sm:px-3 py-1 rounded text-[0.65rem] uppercase tracking-wider transition-colors hover:bg-white/10 flex items-center gap-1.5"
+              aria-label={isPaused ? 'Resume game' : 'Pause game'}
               style={{ color: isPaused ? '#FFFDF7' : '#D4A574', border: '1px solid rgba(212,165,116,0.3)', background: isPaused ? 'rgba(181,112,79,0.35)' : 'transparent' }}
               title={isPaused ? 'Resume game' : 'Pause game'}
             >
               {isPaused ? <Play size={12} /> : <Pause size={12} />}
-              {isPaused ? 'Resume' : 'Pause'}
+              <span className="hidden sm:inline">{isPaused ? 'Resume' : 'Pause'}</span>
             </button>
           )}
           {tipsEnabled && (
@@ -846,13 +868,14 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[3]}
                 isActive={game.currentPlayerIndex === 3}
                 side="left"
+                mobileMinWidth={mobileSideWidth}
                 showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 3 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
               />
             )}
             {config.playerCount === 3 && (
-              <GhostWall />
+              <GhostWall mobileWidth={mobileSideWidth} />
             )}
 
             {/* Center: Charleston / Discard Pool + Actions
@@ -920,12 +943,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   {/* Discard Area
                       Mobile maxHeight is capped so the bottom rack and controls
                       stay in view while the center discard field remains readable. */}
-                  <div className="rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
+                  <div ref={discardPoolRef} className="discard-pool rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
                     background: blankTradeMode ? 'rgba(181,112,79,0.2)' : 'rgba(255,253,247,0.1)',
                     border: blankTradeMode ? '2px solid rgba(181,112,79,0.6)' : '1px solid rgba(255,253,247,0.12)',
-                    maxHeight: config.playerCount >= 3 ? 'min(34dvh, 18rem)' : 'min(42dvh, 20rem)',
-                    transition: 'all 0.2s ease',
-                  }}>
+                    ['--pool-max' as string]: config.playerCount >= 3 ? 'min(34dvh, 18rem)' : 'min(42dvh, 20rem)',
+                    transition: 'background 0.2s ease, border-color 0.2s ease',
+                  } as React.CSSProperties}>
                     <div className="flex flex-wrap gap-1 justify-center min-h-[50px]">
                       {game.discardPool.length === 0 ? (
                         <div className="flex items-center justify-center w-full py-6" style={{
@@ -1087,6 +1110,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[1]}
                 isActive={game.currentPlayerIndex === 1}
                 side="right"
+                mobileMinWidth={mobileSideWidth}
                 showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 1 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
@@ -1142,49 +1166,54 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         {/* Player's Area */}
         <div ref={playerBarRef} className="sticky bottom-0 z-20 shrink-0" style={{ background: '#FFFDF7', borderTop: '3px solid #B5704F', paddingBottom: 'env(safe-area-inset-bottom)' }}>
           {/* Controls — py reduced on mobile to keep full player area on-screen */}
-          <div className="flex items-center justify-between px-2 sm:px-3 py-0.5 sm:py-1" style={{
+          <div className="flex items-center justify-between gap-1 px-2 sm:px-3 py-1" style={{
             borderBottom: '1px solid rgba(27,42,74,0.06)',
           }}>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
+              <ArrowUpDown size={12} className="sm:hidden shrink-0" style={{ color: '#6B5E4F' }} aria-hidden />
               <button
                 onClick={() => handleSort('rank')}
-                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-colors hover:bg-[#F5F0E6]"
+                className={`${CTRL_BTN} hover:bg-[#F5F0E6]`}
                 style={{ color: '#1B2A4A', border: '1px solid rgba(27,42,74,0.12)' }}
+                aria-label="Sort by rank"
               >
-                Sort Rank
+                <span className="hidden sm:inline">Sort </span>Rank
               </button>
               <button
                 onClick={() => handleSort('suit')}
-                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-colors hover:bg-[#F5F0E6]"
+                className={`${CTRL_BTN} hover:bg-[#F5F0E6]`}
                 style={{ color: '#1B2A4A', border: '1px solid rgba(27,42,74,0.12)' }}
+                aria-label="Sort by suit"
               >
-                Sort Suit
+                <span className="hidden sm:inline">Sort </span>Suit
               </button>
               <button
                 onClick={() => setShowAnalyze((v) => !v)}
-                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110 flex items-center gap-1"
+                className={`${CTRL_BTN} hover:brightness-110`}
                 style={{
                   background: showAnalyze ? '#1B2A4A' : '#B5704F',
                   color: '#FFFDF7',
                   fontWeight: 600,
-                  border: showAnalyze ? '2px solid #D4A574' : 'none',
+                  border: `2px solid ${showAnalyze ? '#D4A574' : 'transparent'}`,
                 }}
                 title="Strategy analysis for this hand"
+                aria-label="Analyze"
+                aria-pressed={showAnalyze}
               >
-                <Lightbulb size={10} />
-                Analyze
+                <Lightbulb size={12} />
+                <span className="hidden sm:inline">Analyze</span>
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
               <div className="relative">
                 <button
-                  className={`px-3 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110 ${jokerExchangeTipActive ? 'animate-pulse' : ''}`}
+                  className={`${CTRL_BTN} hover:brightness-110 ${jokerExchangeTipActive ? 'animate-pulse' : ''}`}
                   style={{
                     background: jokerExchangeMode ? '#1B2A4A' : jokerExchangeTipActive ? '#B5704F' : '#2D6A4F',
                     color: '#FFFDF7',
                     fontWeight: 600,
-                    border: jokerExchangeMode ? '2px solid #B5704F' : jokerExchangeTipActive ? '2px solid #D4A574' : 'none',
+                    border: `2px solid ${jokerExchangeMode ? '#B5704F' : jokerExchangeTipActive ? '#D4A574' : 'transparent'}`,
                     boxShadow: jokerExchangeMode
                       ? '0 0 8px rgba(181,112,79,0.4)'
                       : jokerExchangeTipActive
@@ -1218,9 +1247,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 )}
               </div>
               <button
-                className="px-4 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110"
+                className={`${CTRL_BTN} hover:brightness-110`}
                 style={{
                   background: game.phase === 'gameOver' ? '#2D6A4F' : '#C4453E',
+                  border: '2px solid transparent',
                   color: '#FFFDF7',
                   fontWeight: 600,
                   cursor: 'pointer',
@@ -1239,7 +1269,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="hidden sm:flex items-center gap-1.5">
               <div className="px-2 py-0.5 rounded" style={{
                 background: '#F5F0E6',
                 fontSize: '0.6rem',
@@ -1317,11 +1347,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                       )}
                     </div>
                     {/* Tiles */}
-                    <div className="flex items-end justify-center gap-0.5 px-2 py-1 overflow-x-auto" style={{
+                    <div className="px-2 py-1 overflow-x-auto" style={{
                       opacity: rackLocked ? 0.9 : isActive ? 1 : 0.6,
                       filter: rackLocked ? 'none' : isActive ? 'none' : 'grayscale(0.3)',
                       minHeight: isActive ? 'auto' : 40,
                     }}>
+                    <div className="flex items-end gap-0.5 w-max mx-auto">
                       {rackHand.map((tile, index) => {
                         if (isActive && !rackLocked) {
                           return (
@@ -1367,19 +1398,22 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         );
                       })}
                     </div>
+                    </div>
                   </div>
                 );
               })}
             </div>
           ) : (
             /* ─── Standard Single Rack ─── */
-            <div className="flex items-end justify-center gap-0.5 px-2 py-2 overflow-x-auto">
+            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT }}>
+              <div className="flex items-end gap-0.5 w-max mx-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT - 16 }}>
               {humanPlayer.hand.map((tile, index) => {
                 const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(index);
                 const isAnalyzeHovered = analyzeHoverId === tile.id;
                 return (
                   <div
                     key={tile.id}
+                    data-tile-id={tile.id}
                     className="relative"
                     style={isAnalyzeHovered ? {
                       outline: '3px solid #B5704F',
@@ -1414,10 +1448,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
 
-          {/* Hint */}
+          {/* Hint — fixed-height row so the bar keeps its position in every state */}
+          <div className="px-2 overflow-hidden whitespace-nowrap [&>div]:truncate" style={{ height: 18 }}>
           {game.phase === 'charleston' && charlestonSubPhase === 'selecting' && (
             <div className="text-center pb-1" style={{
               color: '#B5704F',
@@ -1470,6 +1506,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 : 'Click to select \u00b7 Drag to reorder'}
             </div>
           )}
+
+          </div>
 
           {/* Plan Bar - Quick Reference Hands */}
           <div className="px-2 pb-1.5 overflow-x-auto" style={{
@@ -1737,6 +1775,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         game={game}
         playerIndex={0}
         rack={activeRack}
+        playerBarHeight={playerBarHeight}
         onClose={() => { setShowAnalyze(false); setAnalyzeHoverId(null); }}
         onTileHover={setAnalyzeHoverId}
       />
@@ -1937,20 +1976,12 @@ function CharlestonUI({
                   </div>
                 ))}
               </div>
-              <span style={{
-                color: charlestonSelected.length === 3 ? '#8BB59E' : 'rgba(255,253,247,0.5)',
-                fontSize: '0.65rem',
-              }}>
-                {subPhase === 'passed'
-                  ? 'Tiles passed!'
-                  : `${charlestonSelected.length}/3 tiles selected`}
-              </span>
             </div>
 
             <button
               onClick={onPass}
               disabled={!canPass}
-              className="px-5 py-1.5 rounded uppercase tracking-wider transition-all"
+              className="px-5 py-1.5 rounded uppercase tracking-wider transition-all whitespace-nowrap"
               title={blindAllowed && blindCount > 0 ? `Pass ${charlestonSelected.length} of yours and ${blindCount} unseen from the tiles coming to you` : undefined}
               style={{
                 background: canPass ? '#B5704F' : 'rgba(255,253,247,0.08)',
@@ -1961,9 +1992,20 @@ function CharlestonUI({
                 boxShadow: canPass ? '0 2px 8px rgba(181,112,79,0.4)' : 'none',
               }}
             >
-              {blindAllowed && blindCount > 0 ? `Blind Pass (${blindCount} unseen)` : 'Pass Tiles'}
+              {blindAllowed && blindCount > 0 ? `Blind Pass · ${blindCount}` : 'Pass Tiles'}
             </button>
           </div>
+
+          <p className="mt-2" style={{
+            color: charlestonSelected.length === 3 ? '#8BB59E' : 'rgba(255,253,247,0.5)',
+            fontSize: '0.65rem',
+          }}>
+            {subPhase === 'passed'
+              ? 'Tiles passed!'
+              : blindAllowed && blindCount > 0
+                ? `${charlestonSelected.length}/3 tiles selected · ${blindCount} will be passed on unseen`
+                : `${charlestonSelected.length}/3 tiles selected`}
+          </p>
 
           <p className="mt-2 text-center" style={{
             color: 'rgba(255,253,247,0.35)',
@@ -2256,14 +2298,16 @@ function MobileSideConcealedRack({
 
   const tileAngle = side === 'left' ? 90 : -90;
   const totalHeight = 32 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
-  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -1;
+  // A rotated, scaled tile draws from (left - 3.8) to (left + 35.8). Show its
+  // inner 10px on both sides: right edge at 10 on the left rack, left edge at 0 on the right.
+  const tileLeft = side === 'left' ? MOBILE_SIDE_RACK_MASK_WIDTH - 36 : 4;
 
   return (
     <div
-      className="shrink-0 overflow-y-auto"
+      className="shrink-0 overflow-y-auto overflow-x-hidden flex flex-col"
       style={{ width: MOBILE_SIDE_RACK_MASK_WIDTH, minWidth: MOBILE_SIDE_RACK_MASK_WIDTH }}
     >
-      <div className="relative" style={{ width: 44, height: totalHeight }}>
+      <div className="relative my-auto shrink-0" style={{ width: 44, height: totalHeight }}>
         {Array.from({ length: tileCount }).map((_, i) => {
           const top = i * MOBILE_SIDE_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
           return (
@@ -2363,12 +2407,14 @@ function OpponentColumn({
   isActive,
   side,
   showDrawGap = false,
+  mobileMinWidth,
   clickableJokerIds,
   onJokerClick,
 }: {
   player: any;
   isActive: boolean;
   side: 'left' | 'right';
+  mobileMinWidth?: number;
   showDrawGap?: boolean;
   clickableJokerIds?: Set<string>;
   onJokerClick?: (id: string) => void;
@@ -2412,7 +2458,7 @@ function OpponentColumn({
         )}
       </div>
 
-      <div className="sm:hidden flex items-stretch gap-1 py-1 h-full">
+      <div className={`sm:hidden flex items-stretch gap-1 py-1 h-full ${side === 'right' ? 'justify-end' : 'justify-start'}`} style={{ minWidth: mobileMinWidth }}>
         {side === 'left' && <MobileSideConcealedRack tileCount={player.hand.length} side={side} showDrawGap={showDrawGap} />}
         <div className="flex flex-col items-center justify-center gap-2 min-h-0">
           <div className="flex flex-col items-center gap-1">
@@ -2553,11 +2599,11 @@ function SiameseOpponentRow({
 
 // ─── Ghost Wall (3-player: indicates the empty 4th seat) ────────────
 
-function GhostWall() {
+function GhostWall({ mobileWidth = 6 }: { mobileWidth?: number }) {
   return (
     <div className="shrink-0">
       {/* Mobile: just a hairline placeholder so the flex row still has a left column */}
-      <div className="sm:hidden h-full" style={{ width: 6, background: 'rgba(255,253,247,0.02)' }} />
+      <div className="sm:hidden h-full" style={{ width: mobileWidth, background: 'rgba(255,253,247,0.02)' }} />
       {/* Desktop: labelled ghost column */}
       <div className="hidden sm:flex items-center justify-center py-2 px-2 h-full" style={{ width: 48 }}>
         <div className="flex flex-col items-center gap-1.5">

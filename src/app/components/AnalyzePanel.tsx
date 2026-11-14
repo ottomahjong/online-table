@@ -29,9 +29,11 @@ interface AnalyzePanelProps {
   rack?: 1 | 2;
   onClose: () => void;
   onTileHover?: (tileId: string | null) => void;
+  /** Height of the player's bar, so the phone sheet stops above the rack. */
+  playerBarHeight?: number;
 }
 
-export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTileHover }: AnalyzePanelProps) {
+export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTileHover, playerBarHeight = 0 }: AnalyzePanelProps) {
   const [beginnerMode, setBeginnerMode] = useState(true);
   const [openCandidates, setOpenCandidates] = useState(true);
   const [openAdvice, setOpenAdvice] = useState(true);
@@ -52,14 +54,16 @@ export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTil
 
   return (
     <div
-      className="fixed top-0 right-0 h-full z-50 flex flex-col"
+      // Phones: a sheet between the top bar and the player's bar, so the rack and
+      // controls stay visible. Wider screens: a side panel.
+      className="fixed z-50 flex flex-col inset-x-0 top-12 bottom-[var(--analyze-bottom)] border-t-[3px] sm:inset-x-auto sm:right-0 sm:top-0 sm:bottom-0 sm:w-[420px] sm:border-t-0 sm:border-l-[3px]"
       style={{
-        width: 'min(420px, 92vw)',
+        ['--analyze-bottom' as string]: `${playerBarHeight}px`,
         background: C.cream,
-        borderLeft: `3px solid ${C.terracotta}`,
-        boxShadow: '-8px 0 32px rgba(0,0,0,0.25)',
+        borderColor: C.terracotta,
+        boxShadow: '0 0 32px rgba(0,0,0,0.25)',
         fontFamily: "'Jost', sans-serif",
-      }}
+      } as React.CSSProperties}
       onMouseLeave={() => onTileHover?.(null)}
     >
       {/* Header */}
@@ -290,22 +294,22 @@ function CandidateCard({
         border: `1px solid ${c.fading ? 'rgba(196,69,62,0.4)' : 'rgba(27,42,74,0.1)'}`,
       }}
     >
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
           <span
-            className="px-1.5 py-0.5 rounded uppercase tracking-wider"
+            className="px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0"
             style={{ background: C.navy, color: C.cream, fontSize: '0.5rem', fontWeight: 700 }}
           >
             #{rank}
           </span>
-          <span style={{ color: C.navy, fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.04em' }}>
+          <span className="truncate" style={{ color: C.navy, fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.04em' }}>
             {c.handName}
-          </span>
-          <span style={{ color: C.warmGray, fontSize: '0.55rem' }} title={`Card line ${c.handId}`}>
-            {c.handName !== c.cardLine ? `(${c.cardLine})` : ''}
           </span>
         </div>
         <FeasibilityBar value={c.feasibility} />
+      </div>
+      <div className="mb-1" style={{ color: C.warmGray, fontSize: '0.55rem', minHeight: '0.8rem' }} title={`Card line ${c.handId}`}>
+        {c.handName !== c.cardLine ? `On the card: ${c.cardLine}` : ''}
       </div>
       <div className="flex items-center gap-1 flex-wrap mb-1">
         <Tag label={c.sectionName} color={C.green} />
@@ -414,6 +418,7 @@ function TileAdviceRow({
       className="flex items-start gap-2 px-2 py-1 rounded transition-colors hover:bg-black/3"
       onMouseEnter={() => onHover(a.tileId)}
       onMouseLeave={() => onHover(null)}
+      onClick={() => onHover(a.tileId)}
       style={a.danger ? { background: 'rgba(196,69,62,0.06)' } : {}}
     >
       <span

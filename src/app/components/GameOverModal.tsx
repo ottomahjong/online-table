@@ -263,7 +263,7 @@ function ScoreSummary({ winInfo, players }: { winInfo: WinInfo; players: Player[
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
           {winInfo.payments.map(p => (
             <span key={p.playerIndex} style={{ color: '#1B2A4A', fontSize: '0.62rem' }}>
-              {players[p.playerIndex]?.name} pays {p.amount}
+              {players[p.playerIndex]?.isHuman ? 'You pay' : `${players[p.playerIndex]?.name} pays`} {p.amount}
             </span>
           ))}
           <span style={{ color: '#2D6A4F', fontSize: '0.62rem', fontWeight: 700 }}>

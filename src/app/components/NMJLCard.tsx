@@ -559,16 +559,15 @@ export function NMJLCard({ isOpen, onClose, planHands, onAddPlan, playerBarHeigh
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
+              <svg width="24" height="24" viewBox="0 0 28 28" fill="none" className="hidden sm:block shrink-0">
                 <path d="M14 0L16.5 10.5L28 14L16.5 17.5L14 28L11.5 17.5L0 14L11.5 10.5Z" fill={C.terracotta} />
               </svg>
               <div>
                 <h2
-                  className="tracking-[0.12em] uppercase"
+                  className="tracking-[0.08em] sm:tracking-[0.12em] uppercase text-[0.95rem] sm:text-[1.15rem] whitespace-nowrap"
                   style={{
                     fontFamily: "'Jost', sans-serif",
                     color: C.cream,
-                    fontSize: '1.15rem',
                     fontWeight: 700,
                   }}
                 >
