@@ -581,7 +581,7 @@ export function NMJLCard({ isOpen, onClose, planHands, onAddPlan, playerBarHeigh
                     marginTop: 2,
                   }}
                 >
-                  NATIONAL MAH JONGG LEAGUE &middot; PRACTICE HANDS
+                  PRACTICE HANDS
                 </p>
               </div>
             </div>
