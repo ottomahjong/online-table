@@ -1,7 +1,16 @@
 import {
-  Tile, Suit, WindDirection, DragonColor, GameConfig, Player, GameState,
+  Tile, Suit, WindDirection, DragonColor, GameConfig, Player, GameState, WinInfo,
   getTileSortKey, tilesMatch, getTileRankSortKey, getTileName
 } from './types';
+import { ACTIVE_CARD, CARD_MAX_GROUP_SIZE, type CardPattern, type CardSection } from './cards';
+import { parseTokenStr } from './cards/expand';
+import {
+  ALL_PATTERNS, tileKey, isJoker, isJokerEligibleToken, suitDragon, SUIT_PERMS,
+  findBestWin, computeAvailability, type WinMatch,
+} from './handMatcher';
+import {
+  chooseDiscard, chooseCall, chooseCharlestonPass, chooseCourtesyCount, bestPlanCost,
+} from './aiStrategy';
 
 // ─── Tile Generation ────────────────────────────────────────────────
 
@@ -307,8 +316,9 @@ export function drawTile(state: GameState): GameState {
         phase: 'gameOver',
         turnPhase: 'waiting',
         winner: state.currentPlayerIndex,
+        winInfo: buildWinInfo(state, newPlayers, state.currentPlayerIndex, true, null),
         message: isHuman
-          ? 'Mah Jongg! Both hands complete — You win!'
+          ? 'Mahjong! Both hands complete — You win!'
           : `${currentPlayer.name} wins with both hands complete!`,
       };
     }
@@ -320,9 +330,10 @@ export function drawTile(state: GameState): GameState {
       phase: 'gameOver',
       turnPhase: 'waiting',
       winner: state.currentPlayerIndex,
+      winInfo: buildWinInfo(state, newPlayers, state.currentPlayerIndex, true, null),
       message: isHuman
-        ? 'Mah Jongg! You win!'
-        : `${currentPlayer.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${currentPlayer.name} wins with Mahjong!`,
     };
   }
 
@@ -331,6 +342,9 @@ export function drawTile(state: GameState): GameState {
     players: newPlayers,
     wall: newWall,
     turnPhase: 'discarding',
+    turnSource: 'draw',
+    lastCallFrom: null,
+    lastActionWasJokerExchange: false,
     selectedTileIndex: null,
     activeRack: siamese ? getPlayableRack(currentPlayer, state.activeRack) : state.activeRack,
     message: isHuman
@@ -371,6 +385,7 @@ export function discardTile(state: GameState, tileIndex: number, rack?: 1 | 2): 
     lastDiscarded: discardedTile,
     lastDiscardedBy: state.currentPlayerIndex,
     turnPhase: 'calling',
+    lastActionWasJokerExchange: false,
     selectedTileIndex: null,
     message: `${player.name} discarded a tile`,
   };
@@ -409,7 +424,7 @@ export interface CallOption {
   jokersUsed: number;
 }
 
-function getDiscardMahJonggRack(state: GameState, playerIndex: number): 1 | 2 | null {
+function getDiscardMahjongRack(state: GameState, playerIndex: number): 1 | 2 | null {
   if (state.phase !== 'playing') return null;
   if (state.turnPhase !== 'calling') return null;
   if (state.lastDiscarded === null) return null;
@@ -438,8 +453,8 @@ function getDiscardMahJonggRack(state: GameState, playerIndex: number): 1 | 2 | 
   return checkSimpleWin(candidatePlayer) ? 1 : null;
 }
 
-export function canClaimMahJonggOnDiscard(state: GameState, playerIndex: number): boolean {
-  return getDiscardMahJonggRack(state, playerIndex) !== null;
+export function canClaimMahjongOnDiscard(state: GameState, playerIndex: number): boolean {
+  return getDiscardMahjongRack(state, playerIndex) !== null;
 }
 
 /**
@@ -479,6 +494,7 @@ export function getCallOptions(state: GameState, playerIndex: number): CallOptio
   ];
 
   for (const { size, label } of sizes) {
+    if (size > CARD_MAX_GROUP_SIZE) continue; // e.g. no sextets unless the card has them
     const neededFromHand = size - 1; // the discard is one of the group tiles
     if (available >= neededFromHand) {
       // Use real matching tiles first, then fill with jokers
@@ -521,7 +537,7 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
   for (let i = 0; i < player.hand.length; i++) {
     if (tilesMatch(player.hand[i], discard)) {
       matchingIndices.push(i);
-    } else if (player.hand[i].type === 'special' && player.hand[i].specialType === 'joker') {
+    } else if (isJoker(player.hand[i])) {
       jokerIndices.push(i);
     }
   }
@@ -573,13 +589,14 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
       phase: 'gameOver',
       turnPhase: 'waiting',
       winner: playerIndex,
+      winInfo: buildWinInfo(state, newPlayers, playerIndex, false, state.lastDiscardedBy),
       currentPlayerIndex: playerIndex,
       lastDiscarded: null,
       lastDiscardedBy: null,
       selectedTileIndex: null,
       message: updatedPlayer.isHuman
-        ? 'Mah Jongg! You win!'
-        : `${updatedPlayer.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${updatedPlayer.name} wins with Mahjong!`,
     };
   }
 
@@ -592,6 +609,9 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
     discardPool: newDiscardPool,
     currentPlayerIndex: playerIndex,
     turnPhase: 'discarding',
+    turnSource: 'call',
+    lastCallFrom: state.lastDiscardedBy,
+    lastActionWasJokerExchange: false,
     lastDiscarded: null,
     lastDiscardedBy: null,
     selectedTileIndex: null,
@@ -601,8 +621,8 @@ export function callTile(state: GameState, playerIndex: number, groupSize?: Call
   };
 }
 
-export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): GameState {
-  const winningRack = getDiscardMahJonggRack(state, playerIndex);
+export function claimMahjongOnDiscard(state: GameState, playerIndex: number): GameState {
+  const winningRack = getDiscardMahjongRack(state, playerIndex);
   if (winningRack === null) {
     return state;
   }
@@ -623,12 +643,13 @@ export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): G
       phase: 'gameOver',
       turnPhase: 'waiting',
       winner: playerIndex,
+      winInfo: buildWinInfo(state, newPlayers, playerIndex, false, state.lastDiscardedBy),
       lastDiscarded: null,
       lastDiscardedBy: null,
       selectedTileIndex: null,
       message: player.isHuman
-        ? 'Mah Jongg! You claimed the discard and win!'
-        : `${player.name} called Mah Jongg on the discard!`,
+        ? 'Mahjong! You claimed the discard and win!'
+        : `${player.name} called Mahjong on the discard!`,
     };
   }
 
@@ -644,8 +665,8 @@ export function claimMahJonggOnDiscard(state: GameState, playerIndex: number): G
     selectedTileIndex: null,
     activeRack: getPlayableRack(updatedPlayer, winningRack === 1 ? 2 : 1),
     message: player.isHuman
-      ? `Rack ${winningRack} is locked with Mah Jongg. Continue building the other rack.`
-      : `${player.name} locked rack ${winningRack} with Mah Jongg.`,
+      ? `Rack ${winningRack} is locked with Mahjong. Continue building the other rack.`
+      : `${player.name} locked rack ${winningRack} with Mahjong.`,
   };
 }
 
@@ -692,544 +713,124 @@ export function sortHandRack(state: GameState, playerIndex: number, type: 'suit'
 // Colors g/r/b represent suit groups (actual suits determined by permutation).
 // Jokers are wildcards that can substitute for any tile in any group.
 
-interface NMJLConcretePattern {
-  tokens: { t: string; c: string }[];
-  concealed: boolean;
-}
+export type NMJLConcretePattern = CardPattern;
 
 export interface WinningHandMatch {
   groups: Tile[][];
   pattern: string;
   colorPattern: string;
   concealed: boolean;
+  handId: string;
+  handLabel: string;
+  section: CardSection;
+  sectionName: string;
+  points: number;
+  jokerless: boolean;
+  value: number;
 }
 
-interface PatternGroupSpec {
-  tokenText: string;
-  tokenColor: string;
-  tileNeeds: Map<string, number>;
-  jokerEligible: boolean;
-  size: number;
-  isNeutralDragon: boolean;
-  neutralDragonCount: number;
+// Card data and tile keys live in ./cards and ./handMatcher; re-exported here
+// so existing imports keep working.
+export { parseTokenStr };
+export { isJokerEligibleToken, suitDragon, SUIT_PERMS };
+export const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = ALL_PATTERNS;
+export const nmjlTileKey = tileKey;
+
+function rackTiles(player: Player, rack: 1 | 2): { concealed: Tile[]; exposures: Tile[][] } {
+  return rack === 2
+    ? { concealed: player.hand2, exposures: player.exposures2 }
+    : { concealed: player.hand, exposures: player.exposures };
 }
 
-/**
- * Check if a token represents a group where jokers may substitute.
- * NMJL rule: jokers can only be used in pungs (3), kongs (4), quints (5),
- * and sextets (6) — groups of 3+ IDENTICAL tiles.
- * Jokers may NOT be used in singles, pairs, or runs/sequences.
- */
-function isJokerEligibleToken(text: string): boolean {
-  if (text.length < 3) return false;
-  const first = text[0];
-  for (let i = 1; i < text.length; i++) {
-    if (text[i] !== first) return false;
-  }
-  return true;
+function toWinningHandMatch(m: WinMatch): WinningHandMatch {
+  return {
+    groups: m.groups,
+    pattern: m.variant.groups.map(g => g.text).join(' '),
+    colorPattern: m.variant.groups.map(g => `${g.text}:${g.color}`).join(' '),
+    concealed: m.pattern.concealed,
+    handId: m.pattern.handId,
+    handLabel: m.pattern.label,
+    section: m.pattern.section,
+    sectionName: ACTIVE_CARD.sectionNames[m.pattern.section],
+    points: m.pattern.points,
+    jokerless: m.jokerless,
+    value: m.value,
+  };
 }
 
-function parseTokenStr(s: string): { t: string; c: string }[] {
-  return s.split(' ').map(part => {
-    const idx = part.lastIndexOf(':');
-    return { t: part.slice(0, idx), c: part.slice(idx + 1) };
-  });
-}
-
-function shiftTokenStr(tokenStr: string, delta: number): string {
-  if (delta === 0) return tokenStr;
-  return tokenStr.split(' ').map(token => {
-    const idx = token.lastIndexOf(':');
-    const text = token.slice(0, idx);
-    const color = token.slice(idx);
-    const newText = text.replace(/[1-9]/g, ch => String(parseInt(ch) + delta));
-    return newText + color;
-  }).join(' ');
-}
-
-const ALL_NMJL_PATTERNS: NMJLConcretePattern[] = (() => {
-  const patterns: NMJLConcretePattern[] = [];
-  function add(concealed: boolean, ...tokenStrs: string[]) {
-    for (const ts of tokenStrs) {
-      patterns.push({ tokens: parseTokenStr(ts), concealed });
-    }
-  }
-
-  // 2025
-  add(false, 'FFFF:n 2025:g 222:r 222:b', 'FFFF:n 2025:g 555:r 555:b');
-  add(false, '222:g 0000:g 222:r 5555:r');
-  add(false, '2025:r 222:g 555:g DDDD:b');
-  add(true, 'FF:n 222:g 000:b 222:r 555:r');
-  // 2468
-  add(false, '222:g 4444:g 666:g 8888:g', '222:g 4444:r 666:g 8888:r');
-  add(false, 'FF:n 2222:g 4444:r 6666:b', 'FF:n 2222:g 6666:r 8888:b');
-  add(false, '22:b 444:b 66:b 888:b DDDD:b');
-  for (const n of ['2','4','6','8']) add(false, `FFFF:n 2468:g ${n}${n}${n}:r ${n}${n}${n}:b`);
-  add(false, 'FFF:n 22:b 44:b 666:b 8888:b');
-  add(false, '222:g 4444:g 666:r 88:r 88:b');
-  for (const n of ['2','4','6','8']) add(false, `FF:n ${n}${n}${n}${n}:g DDDD:r ${n}${n}${n}${n}:b`);
-  for (const n of ['2','4','6','8']) add(true, `22:g 44:g 66:g 88:g ${n}${n}${n}:r ${n}${n}${n}:b`);
-  // Any Like Numbers (try 1-9)
-  for (let d = 1; d <= 9; d++) {
-    const n = String(d);
-    add(false, `FF:n ${n}${n}${n}${n}:g D:g ${n}${n}${n}${n}:r D:r ${n}${n}:b`);
-    add(false, `FFFF:n ${n}${n}:g ${n}${n}${n}:g ${n}${n}${n}:r ${n}${n}:b`);
-    add(false, `FFFF:n ${n}${n}:g ${n}${n}${n}:r ${n}${n}${n}:b ${n}${n}:g`);
-    add(false, `FF:n ${n}${n}${n}:g ${n}${n}${n}:r ${n}${n}${n}:b DDD:n`);
-  }
-  // Quints
-  for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('FF:n 111:g 2222:r 33333:b', d));
-  for (let d = 0; d <= 7; d++) {
-    for (const w of ['NNNN','EEEE','WWWW','SSSS']) {
-      const sh = shiftTokenStr('11111:b 22222:b', d).split(' ');
-      add(false, `${sh[0]} ${w}:n ${sh[1]}`);
-    }
-  }
-  for (let d = 1; d <= 9; d++) { const n = String(d); add(false, `FF:n ${n}${n}${n}${n}${n}:g ${n}${n}:b ${n}${n}${n}${n}${n}:r`); }
-  // Consecutive Run
-  add(false, '11:b 222:b 3333:b 444:b 55:b', '55:b 666:b 7777:b 888:b 99:b');
-  for (let d = 0; d <= 5; d++) { add(false, shiftTokenStr('111:b 2222:b 333:b 4444:b', d)); add(false, shiftTokenStr('111:g 2222:r 333:g 4444:r', d)); }
-  for (let d = 0; d <= 6; d++) { add(false, shiftTokenStr('FFFF:n 1111:b 22:b 3333:b', d)); add(false, shiftTokenStr('FFFF:n 1111:g 22:r 3333:b', d)); }
-  for (let d = 0; d <= 4; d++) add(false, shiftTokenStr('FFF:n 123:g 4444:r 5555:b', d));
-  for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('FF:n 11:b 222:b 3333:b DDD:n', d));
-  for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('111:g 222:g 3333:r DD:g DD:r', d));
-  // CR/7: "Any 5 Consec. Nos, Pair Any Nos, In Pung, Kongs Match Pair"
-  // The pair can appear at ANY of the 5 positions within the run (2025 clarification).
-  // Both kongs must match the paired number; the run and kongs may be in 1 or 3 suits.
-  // Templates: pair at run position 0→4. shiftTokenStr moves all digits up by d.
-  for (let d = 0; d <= 4; d++) {
-    // Pair at run position 0 (first number): e.g. 1,1,2,3,4,5 + kongs 1111
-    add(false, shiftTokenStr('112345:b 1111:b 1111:b', d)); // 1-suit
-    add(false, shiftTokenStr('112345:b 1111:g 1111:r', d)); // 3-suit
-    // Pair at run position 1 (second number): e.g. 1,2,2,3,4,5 + kongs 2222
-    add(false, shiftTokenStr('122345:b 2222:b 2222:b', d)); // 1-suit
-    add(false, shiftTokenStr('122345:b 2222:g 2222:r', d)); // 3-suit
-    // Pair at run position 2 (middle number): e.g. 1,2,3,3,4,5 + kongs 3333
-    add(false, shiftTokenStr('123345:b 3333:b 3333:b', d)); // 1-suit
-    add(false, shiftTokenStr('123345:b 3333:g 3333:r', d)); // 3-suit
-    // Pair at run position 3 (fourth number): e.g. 1,2,3,4,4,5 + kongs 4444
-    add(false, shiftTokenStr('123445:b 4444:b 4444:b', d)); // 1-suit
-    add(false, shiftTokenStr('123445:b 4444:g 4444:r', d)); // 3-suit
-    // Pair at run position 4 (last number): e.g. 1,2,3,4,5,5 + kongs 5555
-    add(false, shiftTokenStr('123455:b 5555:b 5555:b', d)); // 1-suit
-    add(false, shiftTokenStr('123455:b 5555:g 5555:r', d)); // 3-suit
-  }
-  for (let d = 0; d <= 6; d++) add(true, shiftTokenStr('FF:n 1:g 22:g 333:g 1:r 22:r 333:r', d));
-  // 13579
-  add(false, '11:b 333:b 5555:b 777:b 99:b', '11:g 333:g 5555:r 777:r 99:b');
-  add(false, '111:g 3333:g 333:r 5555:r', '555:g 7777:g 777:r 9999:r');
-  add(false, '1111:b 333:b 5555:b DDD:n', '5555:b 777:b 9999:b DDD:n');
-  add(false, 'FFFF:n 1111:g 9999:r 10:b');
-  add(false, 'FFF:n 135:b 7777:b 9999:b', 'FFF:n 135:g 7777:r 9999:b');
-  add(false, '111:g 333:g 5555:r DD:g DD:r', '555:g 777:g 9999:r DD:g DD:r');
-  add(false, '11:g 333:g NEWS:n 333:r 55:r', '55:g 777:g NEWS:n 777:r 99:r');
-  add(false, '1111:g 33:r 55:r 77:r 9999:g');
-  add(false, 'FF:n 11:g 33:g 111:r 333:r 55:b', 'FF:n 55:g 77:g 555:r 777:r 99:b');
-  // Winds & Dragons
-  add(false, 'NNNN:n EEE:n WWW:n SSSS:n', 'NNN:n EEEE:n WWWW:n SSS:n');
-  for (let d = 0; d <= 6; d++) add(false, shiftTokenStr('FF:n 123:g DD:g DDD:r DDDD:b', d));
-  add(false, 'FFF:n NN:n EE:n WWWW:n SSS:n');
-  add(false, 'FFFF:n DDD:g NEWS:n DDD:r');
-  for (const n of ['1','3','5','7','9']) add(false, `NNNN:n ${n}:g ${n}${n}:r ${n}${n}${n}:b SSSS:n`);
-  for (const n of ['2','4','6','8']) add(false, `EEEE:n ${n}:g ${n}${n}:r ${n}${n}${n}:b WWWW:n`);
-  add(false, 'NNN:n EE:n WWW:n SS:n 2025:g', 'NNN:n EE:n WW:n SSS:n 2025:g');
-  add(true, 'NN:n EE:n WWW:n SSS:n DDDD:n');
-  // 369
-  add(false, '333:g 6666:g 666:r 9999:r', '333:g 6666:r 666:b 9999:r');
-  add(false, 'FF:n 3333:b 6666:b 9999:b', 'FF:n 3333:g 6666:r 9999:b');
-  for (const n of ['3','6','9']) add(false, `${n}${n}${n}${n}:g DDD:g ${n}${n}${n}${n}:r DDD:r`);
-  add(false, 'FFF:n 3333:g 369:r 9999:r');
-  for (const n of ['3','6','9']) add(false, `33:g 66:g 99:g ${n}${n}${n}${n}:r ${n}${n}${n}${n}:b`);
-  add(true, 'FF:n 333:g D:g 666:r D:r 999:b D:b');
-  // Singles & Pairs
-  for (let d = 0; d <= 5; d++) add(true, shiftTokenStr('NN:n EW:n SS:n 11:b 22:b 33:b 44:b', d));
-  add(true, 'FF:n 2468:g DD:g 2468:r DD:r');
-  for (const n of ['3','6','9']) add(true, `336699:g 336699:r ${n}${n}:b`);
-  for (let d = 0; d <= 7; d++) add(true, shiftTokenStr('FF:n 11:g 22:g 11:r 22:r 11:b 22:b', d));
-  for (const n of ['1','3','5','7','9']) add(true, `11:g 33:g 55:g 77:g 99:g ${n}${n}:r ${n}${n}:b`);
-  add(true, 'FF:n 2025:g 2025:r 2025:b');
-
-  return patterns;
-})();
-
-function nmjlTileKey(tile: Tile): string {
-  switch (tile.type) {
-    case 'suited': return `s_${tile.suit}_${tile.value}`;
-    case 'wind': return `w_${tile.direction}`;
-    case 'dragon': return `d_${tile.color}`;
-    case 'special':
-      if (tile.specialType === 'flower') return 'flower';
-      if (tile.specialType === 'joker') return 'joker';
-      return 'blank';
-  }
-}
-
-function suitDragon(suit: Suit): string {
-  switch (suit) { case 'bam': return 'green'; case 'crak': return 'red'; case 'dot': return 'soap'; }
-}
-
-const SUIT_PERMS: [Suit, Suit, Suit][] = [
-  ['bam','crak','dot'],['bam','dot','crak'],['crak','bam','dot'],
-  ['crak','dot','bam'],['dot','bam','crak'],['dot','crak','bam'],
-];
-
-function matchesPattern(
-  tileCounts: Map<string, number>, jokerCount: number,
-  pattern: NMJLConcretePattern, hasExposures: boolean
-): boolean {
-  if (pattern.concealed && hasExposures) return false;
-
-  for (const [gSuit, rSuit, bSuit] of SUIT_PERMS) {
-    const suitMap: Record<string, Suit> = { g: gSuit, r: rSuit, b: bSuit };
-
-    // Parse tokens into groups, tracking joker eligibility and neutral dragons
-    const groups: {
-      tileNeeds: Map<string, number>;
-      jokerEligible: boolean;
-      size: number;
-      isNeutralDragon: boolean;
-      neutralDragonCount: number;
-    }[] = [];
-    let hasNeutralDragons = false;
-    let valid = true;
-
-    for (const tok of pattern.tokens) {
-      if (tok.c === 'o') continue; // skip operators (+, =)
-      const text = tok.t;
-      const color = tok.c;
-      const jokerEligible = isJokerEligibleToken(text);
-      const tileNeeds = new Map<string, number>();
-
-      if (/^F+$/.test(text)) {
-        tileNeeds.set('flower', text.length);
-        groups.push({ tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-        continue;
-      }
-
-      if (/^[NEWS]+$/.test(text)) {
-        const wm: Record<string, string> = { N: 'north', E: 'east', W: 'west', S: 'south' };
-        for (const ch of text) {
-          const k = `w_${wm[ch]}`;
-          tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-        }
-        groups.push({ tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-        continue;
-      }
-
-      if (/^D+$/.test(text)) {
-        if (color === 'n') {
-          // Neutral dragon — resolved later by trying all 3 dragon types
-          hasNeutralDragons = true;
-          groups.push({ tileNeeds, jokerEligible, size: text.length, isNeutralDragon: true, neutralDragonCount: text.length });
-          continue;
-        }
-        const s = suitMap[color];
-        if (s) {
-          const k = `d_${suitDragon(s)}`;
-          tileNeeds.set(k, text.length);
-        }
-        groups.push({ tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-        continue;
-      }
-
-      // Suited tiles (digits, 0 = matching dragon for the suit)
-      const suit = suitMap[color];
-      if (!suit) { valid = false; break; }
-      for (const ch of text) {
-        const digit = parseInt(ch);
-        if (digit === 0) {
-          // 0 represents the dragon matching this suit (not always soap!)
-          const k = `d_${suitDragon(suit)}`;
-          tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-        } else if (digit >= 1 && digit <= 9) {
-          const k = `s_${suit}_${digit}`;
-          tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-        }
-      }
-      groups.push({ tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-    }
-
-    if (!valid) continue;
-
-    // Verify total tile count = 14
-    let totalSize = 0;
-    for (const g of groups) totalSize += g.size;
-    if (totalSize !== 14) continue;
-
-    // Try all dragon colors for neutral dragon groups
-    const dragonOptions: (string | null)[] = hasNeutralDragons ? ['red', 'green', 'soap'] : [null];
-
-    for (const dragonType of dragonOptions) {
-      // Separate tile needs into non-joker-eligible (must use real tiles)
-      // and joker-eligible (can use jokers for shortfall) buckets
-      const noJokerNeeds = new Map<string, number>();
-      const jokerAllowedNeeds = new Map<string, number>();
-
-      for (const group of groups) {
-        let needs: Map<string, number>;
-        if (group.isNeutralDragon && dragonType) {
-          needs = new Map<string, number>();
-          needs.set(`d_${dragonType}`, group.neutralDragonCount);
-        } else {
-          needs = group.tileNeeds;
-        }
-
-        const targetMap = group.jokerEligible ? jokerAllowedNeeds : noJokerNeeds;
-        for (const [key, count] of needs) {
-          targetMap.set(key, (targetMap.get(key) || 0) + count);
-        }
-      }
-
-      // Phase 1: Non-joker-eligible groups must be fully satisfied by real tiles
-      const remaining = new Map(tileCounts);
-      let feasible = true;
-      for (const [key, needed] of noJokerNeeds) {
-        const avail = remaining.get(key) || 0;
-        if (avail < needed) { feasible = false; break; }
-        remaining.set(key, avail - needed);
-      }
-      if (!feasible) continue;
-
-      // Phase 2: Joker-eligible groups use remaining real tiles first, then jokers
-      let jokersNeeded = 0;
-      for (const [key, needed] of jokerAllowedNeeds) {
-        const avail = remaining.get(key) || 0;
-        const used = Math.min(avail, needed);
-        remaining.set(key, avail - used);
-        jokersNeeded += needed - used;
-      }
-
-      if (jokersNeeded <= jokerCount) return true;
-    }
-  }
-  return false;
-}
-
-function buildPatternGroups(pattern: NMJLConcretePattern, suitMap: Record<string, Suit>, dragonType: string | null): PatternGroupSpec[] | null {
-  const groups: PatternGroupSpec[] = [];
-
-  for (const tok of pattern.tokens) {
-    if (tok.c === 'o') continue;
-
-    const text = tok.t;
-    const color = tok.c;
-    const jokerEligible = isJokerEligibleToken(text) && !/^F+$/.test(text) && !/^[NEWS]+$/.test(text);
-    const tileNeeds = new Map<string, number>();
-
-    if (/^F+$/.test(text)) {
-      tileNeeds.set('flower', text.length);
-      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-      continue;
-    }
-
-    if (/^[NEWS]+$/.test(text)) {
-      const wm: Record<string, string> = { N: 'north', E: 'east', W: 'west', S: 'south' };
-      for (const ch of text) {
-        const k = `w_${wm[ch]}`;
-        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-      }
-      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-      continue;
-    }
-
-    if (/^D+$/.test(text)) {
-      if (color === 'n') {
-        if (!dragonType) return null;
-        tileNeeds.set(`d_${dragonType}`, text.length);
-        groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: true, neutralDragonCount: text.length });
-        continue;
-      }
-
-      const s = suitMap[color];
-      if (!s) return null;
-      tileNeeds.set(`d_${suitDragon(s)}`, text.length);
-      groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-      continue;
-    }
-
-    const suit = suitMap[color];
-    if (!suit) return null;
-    for (const ch of text) {
-      const digit = parseInt(ch);
-      if (digit === 0) {
-        const k = `d_${suitDragon(suit)}`;
-        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-      } else if (digit >= 1 && digit <= 9) {
-        const k = `s_${suit}_${digit}`;
-        tileNeeds.set(k, (tileNeeds.get(k) || 0) + 1);
-      }
-    }
-    groups.push({ tokenText: text, tokenColor: color, tileNeeds, jokerEligible, size: text.length, isNeutralDragon: false, neutralDragonCount: 0 });
-  }
-
-  const totalSize = groups.reduce((sum, group) => sum + group.size, 0);
-  return totalSize === 14 ? groups : null;
-}
-
-function cloneTilePools(tilePools: Map<string, Tile[]>): Map<string, Tile[]> {
-  return new Map(Array.from(tilePools.entries(), ([key, tiles]) => [key, [...tiles]]));
-}
-
-function assignPatternGroups(
-  groups: PatternGroupSpec[],
-  tilePools: Map<string, Tile[]>,
-  jokers: Tile[],
-  index = 0
-): Tile[][] | null {
-  if (index >= groups.length) return [];
-
-  const group = groups[index];
-  const needEntries = Array.from(group.tileNeeds.entries());
-
-  if (!group.jokerEligible) {
-    const nextPools = cloneTilePools(tilePools);
-    const tilesForGroup: Tile[] = [];
-
-    for (const [key, needed] of needEntries) {
-      const available = nextPools.get(key) || [];
-      if (available.length < needed) return null;
-      tilesForGroup.push(...available.slice(0, needed));
-      nextPools.set(key, available.slice(needed));
-    }
-
-    const rest = assignPatternGroups(groups, nextPools, jokers, index + 1);
-    return rest ? [tilesForGroup, ...rest] : null;
-  }
-
-  if (needEntries.length !== 1) return null;
-
-  const [key, needed] = needEntries[0];
-  const available = tilePools.get(key) || [];
-  const maxReal = Math.min(needed, available.length);
-  const minReal = Math.max(0, needed - jokers.length);
-
-  for (let realCount = maxReal; realCount >= minReal; realCount--) {
-    const jokerCountNeeded = needed - realCount;
-    const nextPools = cloneTilePools(tilePools);
-    const tilesForGroup: Tile[] = [
-      ...available.slice(0, realCount),
-      ...jokers.slice(0, jokerCountNeeded),
-    ];
-    nextPools.set(key, available.slice(realCount));
-
-    const rest = assignPatternGroups(groups, nextPools, jokers.slice(jokerCountNeeded), index + 1);
-    if (rest) return [tilesForGroup, ...rest];
-  }
-
-  return null;
-}
-
+/** The highest-scoring card hand this rack forms (exactly 14 tiles), or null. */
 export function findWinningHandMatch(player: Player, rack: 1 | 2 = 1): WinningHandMatch | null {
-  const concealedTiles = rack === 2 ? player.hand2 : player.hand;
-  const exposedTiles = rack === 2 ? player.exposures2.flat() : player.exposures.flat();
-  const allTiles = [...concealedTiles, ...exposedTiles];
-  const hasExposures = (rack === 2 ? player.exposures2 : player.exposures).length > 0;
-  if (allTiles.length !== 14) return null;
-
-  const tilePools = new Map<string, Tile[]>();
-  const jokers: Tile[] = [];
-
-  for (const tile of allTiles) {
-    if (tile.type === 'special' && tile.specialType === 'joker') {
-      jokers.push(tile);
-      continue;
-    }
-    const key = nmjlTileKey(tile);
-    const list = tilePools.get(key) || [];
-    list.push(tile);
-    tilePools.set(key, list);
-  }
-
-  for (const pattern of ALL_NMJL_PATTERNS) {
-    if (pattern.concealed && hasExposures) continue;
-
-    for (const [gSuit, rSuit, bSuit] of SUIT_PERMS) {
-      const suitMap: Record<string, Suit> = { g: gSuit, r: rSuit, b: bSuit };
-      const hasNeutralDragons = pattern.tokens.some(tok => tok.c !== 'o' && /^D+$/.test(tok.t) && tok.c === 'n');
-      const dragonOptions: (string | null)[] = hasNeutralDragons ? ['red', 'green', 'soap'] : [null];
-
-      for (const dragonType of dragonOptions) {
-        const groups = buildPatternGroups(pattern, suitMap, dragonType);
-        if (!groups) continue;
-
-        const assignedGroups = assignPatternGroups(groups, tilePools, jokers);
-        if (!assignedGroups) continue;
-
-        return {
-          groups: assignedGroups,
-          pattern: groups.map(group => group.tokenText).join(' '),
-          colorPattern: groups.map(group => `${group.tokenText}:${group.tokenColor}`).join(' '),
-          concealed: pattern.concealed,
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function buildTileCounts(tiles: Tile[]): { counts: Map<string, number>; jokerCount: number } {
-  const counts = new Map<string, number>();
-  let jokerCount = 0;
-  for (const tile of tiles) {
-    if (tile.type === 'special' && tile.specialType === 'joker') { jokerCount++; }
-    else { const key = nmjlTileKey(tile); counts.set(key, (counts.get(key) || 0) + 1); }
-  }
-  return { counts, jokerCount };
+  const { concealed, exposures } = rackTiles(player, rack);
+  const m = findBestWin(concealed, exposures);
+  return m ? toWinningHandMatch(m) : null;
 }
 
 export function checkSimpleWin(player: Player): boolean {
-  const allTiles = [...player.hand, ...player.exposures.flat()];
-  const totalTiles = allTiles.length;
-  const hasExposures = player.exposures.length > 0;
-
-  if (totalTiles === 14) {
-    const { counts, jokerCount } = buildTileCounts(allTiles);
-    for (const pattern of ALL_NMJL_PATTERNS) {
-      if (matchesPattern(counts, jokerCount, pattern, hasExposures)) return true;
+  const { concealed, exposures } = rackTiles(player, 1);
+  const total = concealed.length + exposures.reduce((s, e) => s + e.length, 0);
+  if (total === 14) return findBestWin(concealed, exposures) !== null;
+  if (total === 15) {
+    for (let i = 0; i < concealed.length; i++) {
+      const reduced = [...concealed.slice(0, i), ...concealed.slice(i + 1)];
+      if (findBestWin(reduced, exposures)) return true;
     }
-    return false;
   }
-
-  if (totalTiles === 15) {
-    // Try removing each hand tile to find a 14-tile winning combination
-    for (let i = 0; i < player.hand.length; i++) {
-      const reducedTiles = [
-        ...player.hand.slice(0, i), ...player.hand.slice(i + 1),
-        ...player.exposures.flat(),
-      ];
-      const { counts, jokerCount } = buildTileCounts(reducedTiles);
-      for (const pattern of ALL_NMJL_PATTERNS) {
-        if (matchesPattern(counts, jokerCount, pattern, hasExposures)) return true;
-      }
-    }
-    return false;
-  }
-
   return false;
 }
 
-function getTileKey(tile: Tile): string {
-  switch (tile.type) {
-    case 'suited': return `${tile.suit}_${tile.value}`;
-    case 'wind': return `wind_${tile.direction}`;
-    case 'dragon': return `dragon_${tile.color}`;
-    case 'special': return `special_${tile.specialType}`;
-  }
+/**
+ * Score a win. A hand scores its highest line on the card, doubled when
+ * jokerless (except Singles & Pairs). Self-drawn: everyone pays double.
+ * Won on a discard: the discarder pays double, everyone else pays single.
+ */
+export function buildWinInfo(
+  state: GameState, players: Player[], winnerIndex: number,
+  selfDrawn: boolean, discarderIndex: number | null,
+): WinInfo | null {
+  const winner = players[winnerIndex];
+  const racks: (1 | 2)[] = isSiameseMode(state) ? [1, 2] : [1];
+  const matches = racks.map(r => findWinningHandMatch(winner, r));
+  if (matches.some(m => m === null)) return null;
+  const ms = matches as WinningHandMatch[];
+  const value = ms.reduce((sum, m) => sum + m.value, 0);
+  const payments = players
+    .map((_, i) => i)
+    .filter(i => i !== winnerIndex)
+    .map(i => ({
+      playerIndex: i,
+      amount: selfDrawn || i === discarderIndex ? value * 2 : value,
+    }));
+  return {
+    winnerIndex,
+    handId: ms.map(m => m.handId).join(' + '),
+    handLabel: ms.map(m => m.handLabel).join(' + '),
+    sectionName: ms.map(m => m.sectionName).join(' + '),
+    basePoints: ms.reduce((sum, m) => sum + m.points, 0),
+    jokerless: ms.every(m => m.jokerless),
+    value,
+    selfDrawn,
+    discarderIndex: selfDrawn ? null : discarderIndex,
+    payments,
+    total: payments.reduce((sum, p) => sum + p.amount, 0),
+  };
 }
 
 function checkSiameseWin(player: Player): boolean {
   return checkSimpleWin(player) && checkSimpleWin({ ...player, hand: player.hand2, exposures: player.exposures2 });
 }
 
-export function declareMahJongg(state: GameState, playerIndex: number): GameState {
+export function declareMahjong(state: GameState, playerIndex: number): GameState {
   if (state.phase !== 'playing') return state;
   // Human must be in the discarding phase (i.e., they have a full hand after drawing)
   if (state.currentPlayerIndex !== playerIndex) return { ...state, message: "It's not your turn." };
-  if (state.turnPhase !== 'discarding') return { ...state, message: 'You can only declare Mah Jongg when it is your turn to discard.' };
+  if (state.turnPhase !== 'discarding') return { ...state, message: 'You can only declare Mahjong when it is your turn to discard.' };
 
   const player = state.players[playerIndex];
   const siamese = isSiameseMode(state);
+  // A turn that began by calling a discard is a win on that discard, unless the
+  // last move was a joker exchange — then it counts as self-drawn.
+  const selfDrawn = state.turnSource !== 'call' || !!state.lastActionWasJokerExchange;
+  const discarder = selfDrawn ? null : (state.lastCallFrom ?? null);
 
   if (siamese) {
     const activeRack = getPlayableRack(player, state.activeRack);
@@ -1241,9 +842,10 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
         phase: 'gameOver',
         turnPhase: 'waiting',
         winner: playerIndex,
+        winInfo: buildWinInfo(state, state.players, playerIndex, selfDrawn, discarder),
         selectedTileIndex: null,
         message: player.isHuman
-          ? 'Mah Jongg! Both hands complete — You win!'
+          ? 'Mahjong! Both hands complete — You win!'
           : `${player.name} wins with both hands complete!`,
       };
     }
@@ -1266,8 +868,8 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
       selectedTileIndex: null,
       activeRack: getPlayableRack(updatedPlayer, otherRack),
       message: player.isHuman
-        ? `Rack ${rackToLock} is locked with Mah Jongg. Build the other rack to win both hands.`
-        : `${player.name} locked rack ${rackToLock} with Mah Jongg.`,
+        ? `Rack ${rackToLock} is locked with Mahjong. Build the other rack to win both hands.`
+        : `${player.name} locked rack ${rackToLock} with Mahjong.`,
     };
   }
 
@@ -1277,10 +879,11 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
       phase: 'gameOver',
       turnPhase: 'waiting',
       winner: playerIndex,
+      winInfo: buildWinInfo(state, state.players, playerIndex, selfDrawn, discarder),
       selectedTileIndex: null,
       message: player.isHuman
-        ? 'Mah Jongg! You win!'
-        : `${player.name} wins with Mah Jongg!`,
+        ? 'Mahjong! You win!'
+        : `${player.name} wins with Mahjong!`,
     };
   }
 
@@ -1288,55 +891,32 @@ export function declareMahJongg(state: GameState, playerIndex: number): GameStat
 }
 
 // ─── AI Turn ────────────────────────────────────────────────────────
+// Bots plan against the card (see aiStrategy): exchange jokers when that
+// doesn't hurt their best plans, declare Mahjong when complete, otherwise
+// discard the tile their plans need least.
 
-/**
- * Evaluate a hand and return the index of the best tile to discard and its score.
- * Lower score = better to discard (less valuable tile).
- */
-function evaluateDiscardIndex(hand: Tile[], skill: number): { bestIndex: number; lowestScore: number } {
-  if (hand.length === 0) return { bestIndex: -1, lowestScore: Infinity };
-
-  const randomFactor = [20, 10, 2, 0.5, 0.1][skill - 1];
-  const groupWeight = [3, 6, 10, 14, 18][skill - 1];
-  const protectJokers = skill >= 2;
-  const protectPairs = skill >= 3;
-
-  let bestDiscardIndex = 0;
-  let lowestScore = Infinity;
-
-  for (let i = 0; i < hand.length; i++) {
-    const tile = hand[i];
-
-    if (tile.type === 'special' && tile.specialType === 'joker') {
-      if (protectJokers) continue;
+/** Swap naturals for exposed jokers while that keeps or improves the bot's best plan. */
+function aiExchangeJokers(state: GameState, playerIndex: number): GameState {
+  let current = state;
+  for (let guard = 0; guard < 6; guard++) {
+    const player = current.players[playerIndex];
+    const avail = computeAvailability(current, playerIndex);
+    const before = bestPlanCost(player.hand, player.exposures, avail);
+    const options = findValidJokerExchanges(current, playerIndex);
+    let applied = false;
+    for (const opt of options) {
+      for (const hi of opt.matchingHandIndices) {
+        const next = executeJokerExchange(current, opt.targetPlayerIndex, opt.exposureIndex, opt.jokerIndexInExposure, hi, playerIndex);
+        if (next === current) continue;
+        const np = next.players[playerIndex];
+        const after = bestPlanCost(np.hand, np.exposures, computeAvailability(next, playerIndex));
+        if (after <= before) { current = next; applied = true; break; }
+      }
+      if (applied) break;
     }
-
-    let matchScore = 0;
-    for (let j = 0; j < hand.length; j++) {
-      if (i === j) continue;
-      if (tilesMatch(hand[i], hand[j])) matchScore += groupWeight;
-    }
-
-    if (tile.type === 'special' && tile.specialType === 'joker') {
-      matchScore += groupWeight * 2;
-    }
-
-    if (protectPairs && matchScore > 0 && matchScore <= groupWeight) {
-      matchScore += groupWeight * 0.5;
-    }
-
-    if (tile.type === 'special' && tile.specialType === 'blank') matchScore -= 5;
-    if (tile.type === 'special' && tile.specialType === 'flower') matchScore -= (skill >= 4 ? 1 : 3);
-
-    matchScore += Math.random() * randomFactor;
-
-    if (matchScore < lowestScore) {
-      lowestScore = matchScore;
-      bestDiscardIndex = i;
-    }
+    if (!applied) break;
   }
-
-  return { bestIndex: bestDiscardIndex, lowestScore };
+  return current;
 }
 
 export function aiTurn(state: GameState): GameState {
@@ -1352,25 +932,33 @@ export function aiTurn(state: GameState): GameState {
     return siameseAiDiscard(state, player, skill);
   }
 
-  const hand = player.hand;
-  if (hand.length === 0) return state;
+  let current = aiExchangeJokers(state, state.currentPlayerIndex);
+  if (current !== state && checkSimpleWin(current.players[current.currentPlayerIndex])) {
+    const won = declareMahjong(current, current.currentPlayerIndex);
+    if (won.phase === 'gameOver') return won;
+  }
 
-  const result = evaluateDiscardIndex(hand, skill);
-  return discardTile(state, result.bestIndex);
+  const me = current.players[current.currentPlayerIndex];
+  if (me.hand.length === 0) return current;
+  const choice = chooseDiscard(me.hand, me.exposures, computeAvailability(current, current.currentPlayerIndex), skill);
+  if (!choice) return current;
+  return discardTile(current, choice.index);
 }
 
-/**
- * Siamese AI discard: evaluate both racks and discard the worst tile from either.
- */
+/** Siamese: discard from whichever unlocked rack gives up the least. */
 function siameseAiDiscard(state: GameState, player: Player, skill: number): GameState {
-  const result1 = evaluateDiscardIndex(player.hand, skill);
-  const result2 = evaluateDiscardIndex(player.hand2, skill);
-
-  // Discard from whichever rack has the "least valuable" tile
-  if (result2.bestIndex >= 0 && (result1.bestIndex < 0 || result2.lowestScore < result1.lowestScore)) {
-    return discardTile(state, result2.bestIndex, 2);
+  const avail = computeAvailability(state, state.currentPlayerIndex);
+  const picks: { rack: 1 | 2; index: number; delta: number }[] = [];
+  for (const rack of [1, 2] as const) {
+    if (isRackLocked(player, rack)) continue;
+    const hand = rack === 1 ? player.hand : player.hand2;
+    const exps = rack === 1 ? player.exposures : player.exposures2;
+    const c = chooseDiscard(hand, exps, avail, skill);
+    if (c) picks.push({ rack, index: c.index, delta: c.delta });
   }
-  return discardTile(state, result1.bestIndex, 1);
+  if (picks.length === 0) return state;
+  picks.sort((a, b) => a.delta - b.delta);
+  return discardTile(state, picks[0].index, picks[0].rack);
 }
 
 /**
@@ -1386,49 +974,71 @@ export function siamesePickDrawRack(player: Player): 1 | 2 {
 }
 
 /**
- * Determine whether an AI player should call a discarded tile.
- * Higher skill levels are more strategic about when to call.
- * Returns the group size to call for, or null if the AI should not call.
+ * Should a bot call the current discard for an exposure? Returns the group
+ * size, or null. Bots call only when the exposure fits a live, exposable plan
+ * on the card and brings it at least a tile closer.
  */
 export function aiShouldCall(state: GameState, playerIndex: number): CallGroupSize | null {
   const options = getCallOptions(state, playerIndex);
-  if (options.length === 0) return null;
+  if (options.length === 0 || !state.lastDiscarded) return null;
+  const player = state.players[playerIndex];
+  const size = chooseCall(
+    player.hand, player.exposures, state.lastDiscarded, options,
+    computeAvailability(state, playerIndex), state.config.botSkillLevel ?? 3,
+  );
+  return size as CallGroupSize | null;
+}
 
-  const skill = state.config.botSkillLevel ?? 3;
+export type HumanClaim =
+  | null
+  | { kind: 'mahjong' }
+  | { kind: 'expose'; size: CallGroupSize };
 
-  // Level 1: 40% chance to miss a valid call entirely
-  if (skill === 1 && Math.random() < 0.4) return null;
-  // Level 2: 15% chance to miss
-  if (skill === 2 && Math.random() < 0.15) return null;
+/**
+ * Resolve everyone's claims on the current discard. Mahjong beats any
+ * exposure; between equal claims, whoever is next in turn after the
+ * discarder wins. The human (player 0) is never claimed for automatically —
+ * their choice is `humanClaim` (null = pass).
+ */
+export function resolveDiscardClaims(state: GameState, humanClaim: HumanClaim = null): GameState {
+  if (state.phase !== 'playing' || state.turnPhase !== 'calling') return state;
+  if (state.lastDiscardedBy === null) return passTurn(state);
 
-  // Higher skill bots prefer larger groups when they have the tiles
-  // Lower skill bots always go for the smallest (pung)
-  if (skill <= 2) {
-    return options[0].size; // Always pung
-  }
+  const n = state.config.playerCount;
+  const order: number[] = [];
+  for (let offset = 1; offset < n; offset++) order.push((state.lastDiscardedBy + offset) % n);
 
-  // Skill 3+: prefer the largest group that uses mostly real tiles (fewer jokers)
-  // Skill 4-5: consider joker economy — don't waste jokers on small groups
-  let bestOption = options[0];
+  const outranked = (next: GameState, who: number): GameState => {
+    if (!humanClaim || who === 0) return next;
+    const name = state.players[who].name;
+    const why = next.phase === 'gameOver'
+      ? `${name} claimed it for Mahjong, which beats any other call.`
+      : `${name} is ahead of you in turn order, so their call came first.`;
+    return { ...next, message: `${next.message} ${why}` };
+  };
 
-  for (const opt of options) {
-    if (skill >= 4) {
-      // Expert/Master: prefer groups that maximize real-tile usage
-      // Don't call for a large group if it burns too many jokers
-      const efficiency = opt.matchUsed / opt.size;
-      const bestEfficiency = bestOption.matchUsed / bestOption.size;
-      if (efficiency >= bestEfficiency && opt.size >= bestOption.size) {
-        bestOption = opt;
-      }
-    } else {
-      // Skill 3: prefer largest available group
-      if (opt.matchUsed >= bestOption.matchUsed) {
-        bestOption = opt;
-      }
+  for (const i of order) {
+    const p = state.players[i];
+    if (p.isHuman) {
+      if (humanClaim?.kind === 'mahjong' && canClaimMahjongOnDiscard(state, i)) return claimMahjongOnDiscard(state, i);
+      continue;
     }
+    if (canClaimMahjongOnDiscard(state, i)) return outranked(claimMahjongOnDiscard(state, i), i);
   }
 
-  return bestOption.size;
+  for (const i of order) {
+    const p = state.players[i];
+    if (p.isHuman) {
+      if (humanClaim?.kind === 'expose' && getCallOptions(state, i).some(o => o.size === humanClaim.size)) {
+        return callTile(state, i, humanClaim.size);
+      }
+      continue;
+    }
+    const size = aiShouldCall(state, i);
+    if (size !== null) return outranked(callTile(state, i, size), i);
+  }
+
+  return passTurn(state);
 }
 
 // ─── Blank Tile Trade ───────────────────────────────────────────────
@@ -1486,43 +1096,35 @@ export interface JokerExchangeOption {
 }
 
 /**
- * Find all valid joker exchange opportunities for the human player.
- * A valid exchange: the human has a tile in hand matching the non-joker tiles
- * in any player's exposed set that contains a joker.
+ * Joker exchanges open to a player. Only on their own turn, after drawing or
+ * calling (turnPhase 'discarding'); they swap a natural from hand for a joker
+ * in any player's exposure made of that natural.
  */
-export function findValidJokerExchanges(state: GameState): JokerExchangeOption[] {
+export function findValidJokerExchanges(state: GameState, playerIndex = 0): JokerExchangeOption[] {
   if (state.phase !== 'playing') return [];
+  if (state.currentPlayerIndex !== playerIndex || state.turnPhase !== 'discarding') return [];
 
-  const humanHand = state.players[0].hand;
+  const hand = state.players[playerIndex].hand;
   const exchanges: JokerExchangeOption[] = [];
 
   for (let pi = 0; pi < state.players.length; pi++) {
-    const player = state.players[pi];
-    for (let ei = 0; ei < player.exposures.length; ei++) {
-      const exposure = player.exposures[ei];
-
-      // Find joker(s) in this exposure
+    const owner = state.players[pi];
+    for (let ei = 0; ei < owner.exposures.length; ei++) {
+      const exposure = owner.exposures[ei];
       const jokerEntries = exposure
         .map((t, idx) => ({ tile: t, idx }))
-        .filter(({ tile }) => tile.type === 'special' && tile.specialType === 'joker');
-
+        .filter(({ tile }) => isJoker(tile));
       if (jokerEntries.length === 0) continue;
 
-      // Determine what tile type the exposure represents (from non-joker tiles)
-      const nonJokerTile = exposure.find(t => !(t.type === 'special' && t.specialType === 'joker'));
-      if (!nonJokerTile) continue; // All jokers — can't determine type to match
+      const nonJokerTile = exposure.find(t => !isJoker(t));
+      if (!nonJokerTile) continue;
 
-      // Find matching tiles in human's hand
       const matchingHandIndices: number[] = [];
-      for (let hi = 0; hi < humanHand.length; hi++) {
-        if (tilesMatch(humanHand[hi], nonJokerTile)) {
-          matchingHandIndices.push(hi);
-        }
+      for (let hi = 0; hi < hand.length; hi++) {
+        if (tilesMatch(hand[hi], nonJokerTile)) matchingHandIndices.push(hi);
       }
-
       if (matchingHandIndices.length === 0) continue;
 
-      // Each joker in this exposure is a separate exchange option
       for (const { tile: jokerTile, idx: jokerIdx } of jokerEntries) {
         exchanges.push({
           targetPlayerIndex: pi,
@@ -1535,71 +1137,56 @@ export function findValidJokerExchanges(state: GameState): JokerExchangeOption[]
       }
     }
   }
-
   return exchanges;
 }
 
-/**
- * Execute a joker exchange: swap a matching tile from human's hand
- * with a joker in a player's exposed set.
- */
+/** Swap a natural from `playerIndex`'s hand for a joker in an exposure. */
 export function executeJokerExchange(
   state: GameState,
   targetPlayerIndex: number,
   exposureIndex: number,
   jokerIndexInExposure: number,
   handTileIndex: number,
+  playerIndex = 0,
 ): GameState {
   if (state.phase !== 'playing') return state;
+  if (state.currentPlayerIndex !== playerIndex || state.turnPhase !== 'discarding') return state;
 
-  const human = state.players[0];
+  const actor = state.players[playerIndex];
   const target = state.players[targetPlayerIndex];
-
-  // Validate
-  if (handTileIndex < 0 || handTileIndex >= human.hand.length) return state;
+  if (handTileIndex < 0 || handTileIndex >= actor.hand.length) return state;
   if (exposureIndex < 0 || exposureIndex >= target.exposures.length) return state;
 
   const exposure = target.exposures[exposureIndex];
   if (jokerIndexInExposure < 0 || jokerIndexInExposure >= exposure.length) return state;
-
   const jokerTile = exposure[jokerIndexInExposure];
-  if (jokerTile.type !== 'special' || jokerTile.specialType !== 'joker') return state;
+  if (!isJoker(jokerTile)) return state;
 
-  const handTile = human.hand[handTileIndex];
-
-  // Verify the hand tile matches the exposure's identity
-  const nonJokerTile = exposure.find(t => !(t.type === 'special' && t.specialType === 'joker'));
+  const handTile = actor.hand[handTileIndex];
+  const nonJokerTile = exposure.find(t => !isJoker(t));
   if (!nonJokerTile || !tilesMatch(handTile, nonJokerTile)) return state;
 
-  // Perform the swap
-  // Hand tile goes into the exposure, joker comes to hand
-  const newHand = [...human.hand];
-  newHand[handTileIndex] = jokerTile; // joker goes into hand
-
+  const newHand = [...actor.hand];
+  newHand[handTileIndex] = jokerTile;
   const newExposure = [...exposure];
-  newExposure[jokerIndexInExposure] = handTile; // matching tile replaces joker
-
+  newExposure[jokerIndexInExposure] = handTile;
   const newExposures = [...target.exposures];
   newExposures[exposureIndex] = newExposure;
 
   const newPlayers = state.players.map((p, i) => {
-    if (i === 0 && i === targetPlayerIndex) {
-      // Human exchanging with own exposure
-      return { ...p, hand: newHand, exposures: newExposures };
-    }
-    if (i === 0) {
-      return { ...p, hand: newHand };
-    }
-    if (i === targetPlayerIndex) {
-      return { ...p, exposures: newExposures };
-    }
+    if (i === playerIndex && i === targetPlayerIndex) return { ...p, hand: newHand, exposures: newExposures };
+    if (i === playerIndex) return { ...p, hand: newHand };
+    if (i === targetPlayerIndex) return { ...p, exposures: newExposures };
     return p;
   });
 
   return {
     ...state,
     players: newPlayers,
-    message: `Exchanged ${getTileName(handTile)} for a Joker from ${target.name}!`,
+    lastActionWasJokerExchange: true,
+    message: actor.isHuman
+      ? `Exchanged ${getTileName(handTile)} for a Joker from ${target.name}!`
+      : `${actor.name} exchanged ${getTileName(handTile)} for a Joker from ${target.name}.`,
   };
 }
 
@@ -1627,32 +1214,11 @@ export function getPassTarget(from: number, direction: CharlestonDirection, play
 }
 
 /**
- * AI selects 3 tiles to pass during Charleston.
- * Strategy: pass tiles that have the fewest matching tiles in hand.
- * Jokers may NEVER be passed during Charleston.
+ * AI selects tiles to pass during the Charleston: the ones its plans on the
+ * card need least. Jokers may never be passed.
  */
-export function aiSelectCharlestonTiles(hand: Tile[]): number[] {
-  const scored = hand.map((tile, index) => {
-    // Jokers can never be passed
-    if (tile.type === 'special' && tile.specialType === 'joker') {
-      return { index, score: Infinity };
-    }
-    let score = 0;
-    for (let j = 0; j < hand.length; j++) {
-      if (j === index) continue;
-      if (tilesMatch(tile, hand[j])) score += 10;
-    }
-    // Blanks are worthless
-    if (tile.type === 'special' && tile.specialType === 'blank') score -= 5;
-    // Flowers slightly less useful
-    if (tile.type === 'special' && tile.specialType === 'flower') score -= 2;
-    // Add tiny random factor
-    score += Math.random() * 0.5;
-    return { index, score };
-  });
-
-  scored.sort((a, b) => a.score - b.score);
-  return scored.slice(0, 3).map(s => s.index);
+export function aiSelectCharlestonTiles(hand: Tile[], count = 3, skill = 3): number[] {
+  return chooseCharlestonPass(hand, count, undefined, skill);
 }
 
 /**
@@ -1705,4 +1271,132 @@ export function executeCharlestonPass(
   });
 
   return { players: newPlayers, wall };
+}
+
+// ─── Simultaneous Charleston ────────────────────────────────────────
+
+export interface CharlestonRoundResult {
+  players: Player[];
+  wall?: Tile[];
+  /** Tiles the human kept from what was passed to them. */
+  humanReceived: Tile[];
+  /** Tiles the human blind-passed on without seeing them. */
+  blindForwarded: number;
+}
+
+/**
+ * One Charleston pass, as at a real table: every player passes three tiles in
+ * the same direction at once, so the human receives from the player on the
+ * other side (passing right, you receive from your left).
+ *
+ * On the last pass of each Charleston (`blindAllowed`) the human may choose
+ * fewer than three: the rest are taken unseen from the tiles being passed to
+ * them and sent on ("blind pass"). Jokers may never be passed.
+ */
+export function executeCharlestonRound(
+  players: Player[],
+  humanIndices: number[],
+  direction: CharlestonDirection,
+  playerCount: number,
+  wall?: Tile[],
+  opts: { blindAllowed?: boolean; skill?: number; rng?: () => number } = {},
+): CharlestonRoundResult {
+  const human = players[0];
+  const unchanged: CharlestonRoundResult = { players, wall, humanReceived: [], blindForwarded: 0 };
+  if (humanIndices.some(i => !human.hand[i] || isJoker(human.hand[i]))) return unchanged;
+  if (humanIndices.length > 3) return unchanged;
+  if (humanIndices.length < 3 && !(opts.blindAllowed && playerCount >= 3)) return unchanged;
+
+  if (playerCount <= 2) {
+    const toIndex = getPassTarget(0, direction, playerCount);
+    const before = new Set(human.hand.map(t => t.id));
+    const r = executeCharlestonPass(players, 0, toIndex, humanIndices, direction, playerCount, wall);
+    return { players: r.players, wall: r.wall, humanReceived: r.players[0].hand.filter(t => !before.has(t.id)), blindForwarded: 0 };
+  }
+
+  const rng = opts.rng ?? Math.random;
+  const skill = opts.skill ?? 3;
+  const outgoing: Tile[][] = players.map((p, i) => {
+    if (i === 0) return humanIndices.map(idx => p.hand[idx]);
+    return aiSelectCharlestonTiles(p.hand, 3, skill).map(idx => p.hand[idx]);
+  });
+
+  const source = (i: number) => players.findIndex((_, j) => getPassTarget(j, direction, playerCount) === i);
+  let humanIncoming = [...outgoing[source(0)]];
+  let blindForwarded = 0;
+  if (outgoing[0].length < 3) {
+    const need = 3 - outgoing[0].length;
+    const forwarded: Tile[] = [];
+    for (let k = 0; k < need && humanIncoming.length > 0; k++) {
+      const pick = Math.floor(rng() * humanIncoming.length);
+      forwarded.push(humanIncoming[pick]);
+      humanIncoming = humanIncoming.filter((_, idx) => idx !== pick);
+    }
+    outgoing[0] = [...outgoing[0], ...forwarded];
+    blindForwarded = forwarded.length;
+  }
+
+  const newPlayers = players.map((p, i) => {
+    const sentIds = new Set(i === 0 ? humanIndices.map(idx => p.hand[idx].id) : outgoing[i].map(t => t.id));
+    const kept = p.hand.filter(t => !sentIds.has(t.id));
+    const incoming = i === 0 ? humanIncoming : outgoing[source(i)];
+    return { ...p, hand: [...kept, ...incoming] };
+  });
+
+  return { players: newPlayers, wall, humanReceived: humanIncoming, blindForwarded };
+}
+
+export interface CourtesyResult {
+  players: Player[];
+  wall?: Tile[];
+  /** How many tiles the human actually exchanged (the smaller of the two offers). */
+  exchanged: number;
+  partnerIndex: number;
+}
+
+/**
+ * Courtesy pass: each player names 0–3 tiles to trade with the player across;
+ * each pair trades the smaller of their two numbers. The human's selection is
+ * their offer; bots offer only their true deadweight.
+ */
+export function executeCourtesyPass(
+  players: Player[],
+  humanIndices: number[],
+  playerCount: number,
+  wall?: Tile[],
+  skill = 3,
+): CourtesyResult {
+  const partner = getPassTarget(0, 'across', playerCount);
+  if (humanIndices.some(i => !players[0].hand[i] || isJoker(players[0].hand[i])) || humanIndices.length > 3) {
+    return { players, wall, exchanged: 0, partnerIndex: partner };
+  }
+  if (partner < 0) {
+    if (humanIndices.length === 0) return { players, wall, exchanged: 0, partnerIndex: partner };
+    const r = executeCharlestonPass(players, 0, partner, humanIndices, 'across', playerCount, wall);
+    return { players: r.players, wall: r.wall, exchanged: humanIndices.length, partnerIndex: partner };
+  }
+
+  const offer = (i: number) => chooseCourtesyCount(players[i].hand, undefined, skill);
+  const pairs: [number, number][] = [[0, partner]];
+  if (playerCount === 4) pairs.push([1, 3]);
+
+  let next = players.map(p => ({ ...p, hand: [...p.hand] }));
+  let exchanged = 0;
+  for (const [a, b] of pairs) {
+    const countA = a === 0 ? humanIndices.length : offer(a);
+    const count = Math.min(countA, offer(b));
+    if (a === 0) exchanged = count;
+    if (count === 0) continue;
+    const pick = (i: number) => (i === 0
+      ? humanIndices.slice(0, count).map(idx => next[0].hand[idx])
+      : aiSelectCharlestonTiles(next[i].hand, count, skill).map(idx => next[i].hand[idx]));
+    const fromA = pick(a), fromB = pick(b);
+    const idsA = new Set(fromA.map(t => t.id)), idsB = new Set(fromB.map(t => t.id));
+    next = next.map((p, i) => {
+      if (i === a) return { ...p, hand: [...p.hand.filter(t => !idsA.has(t.id)), ...fromB] };
+      if (i === b) return { ...p, hand: [...p.hand.filter(t => !idsB.has(t.id)), ...fromA] };
+      return p;
+    });
+  }
+  return { players: next, wall, exchanged, partnerIndex: partner };
 }

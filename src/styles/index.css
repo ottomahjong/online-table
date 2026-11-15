@@ -22,3 +22,16 @@ body {
   height: 0;
   display: none;
 }
+
+/* Discard pool: cap its height, and on phones snap that cap to whole tile rows
+   (row pitch 48px = 44px tile + 4px gap; 14px = padding + border - one gap). */
+.discard-pool {
+  max-height: var(--pool-max, 18rem);
+}
+@media (max-width: 639px) {
+  @supports (height: round(down, 100px, 48px)) {
+    .discard-pool {
+      max-height: calc(round(down, var(--pool-max, 18rem) - 14px, 48px) + 14px);
+    }
+  }
+}

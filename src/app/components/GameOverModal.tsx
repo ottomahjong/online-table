@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { Player, Tile as TileType } from '../types';
+import { Player, Tile as TileType, WinInfo } from '../types';
 import { TileComponent } from './Tile';
 import { PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { findWinningHandMatch } from '../gameLogic';
@@ -242,6 +242,39 @@ function WinningHandDisplay({ player, humanWon, planHand, isSiamese }: { player:
 
 // ─── Main Modal ─────────────────────────────────────────────────────
 
+// ─── Score ──────────────────────────────────────────────────────────
+
+function ScoreSummary({ winInfo, players }: { winInfo: WinInfo; players: Player[] }) {
+  const how = winInfo.selfDrawn
+    ? 'Self-drawn — everyone pays double'
+    : `On ${players[winInfo.discarderIndex ?? 0]?.name ?? 'a'}'s discard — the discarder pays double`;
+  return (
+    <div className="mt-3 rounded-lg px-3 py-2" style={{ background: 'rgba(27,42,74,0.04)', border: '1px solid rgba(27,42,74,0.08)' }}>
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
+        <span style={{ color: '#1B2A4A', fontSize: '0.75rem', fontWeight: 700 }}>
+          {winInfo.sectionName} · {winInfo.handLabel}
+        </span>
+        <span style={{ color: '#2D6A4F', fontSize: '0.75rem', fontWeight: 700 }}>
+          {winInfo.basePoints} pts{winInfo.value !== winInfo.basePoints ? ` × 2 jokerless = ${winInfo.value}` : ''}
+        </span>
+      </div>
+      <p style={{ color: '#6B5E4F', fontSize: '0.62rem', marginTop: 2 }}>{how}.</p>
+      {winInfo.payments.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+          {winInfo.payments.map(p => (
+            <span key={p.playerIndex} style={{ color: '#1B2A4A', fontSize: '0.62rem' }}>
+              {players[p.playerIndex]?.isHuman ? 'You pay' : `${players[p.playerIndex]?.name} pays`} {p.amount}
+            </span>
+          ))}
+          <span style={{ color: '#2D6A4F', fontSize: '0.62rem', fontWeight: 700 }}>
+            Total {winInfo.total}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface GameOverModalProps {
   winner: number | null;
   players: Player[];
@@ -250,9 +283,10 @@ interface GameOverModalProps {
   onSettings: () => void;
   planHands?: (PlanHand | null)[];
   isSiamese?: boolean;
+  winInfo?: WinInfo | null;
 }
 
-export function GameOverModal({ winner, players, isDraw, onPlayAgain, onSettings, planHands, isSiamese }: GameOverModalProps) {
+export function GameOverModal({ winner, players, isDraw, onPlayAgain, onSettings, planHands, isSiamese, winInfo }: GameOverModalProps) {
   const humanWon = winner === 0;
   const confetti = useConfetti(humanWon);
   const [showTiles, setShowTiles] = useState(false);
@@ -358,7 +392,7 @@ export function GameOverModal({ winner, players, isDraw, onPlayAgain, onSettings
               {isDraw
                 ? 'Draw Game'
                 : humanWon
-                  ? (isSiamese ? 'Double Mah Jongg!' : 'Mah Jongg!')
+                  ? (isSiamese ? 'Double Mahjong!' : 'Mahjong!')
                   : `${winnerPlayer?.name} Wins`}
             </h2>
 
@@ -378,6 +412,7 @@ export function GameOverModal({ winner, players, isDraw, onPlayAgain, onSettings
               }}
             >
               <WinningHandDisplay player={winnerPlayer} humanWon={humanWon} planHand={displayedPlanHand} isSiamese={isSiamese} />
+              {winInfo && <ScoreSummary winInfo={winInfo} players={players} />}
             </div>
           )}
 

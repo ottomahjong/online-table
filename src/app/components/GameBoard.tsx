@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, passTurn, callTile, sortHand, sortHandRack, aiTurn, getCallOptions, aiShouldCall, CallGroupSize, CallOption, executeCharlestonPass, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, aiSelectCharlestonTiles, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahJongg, canClaimMahJonggOnDiscard, claimMahJonggOnDiscard } from '../gameLogic';
+import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahjong, canClaimMahjongOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
+import { AnalyzePanel } from './AnalyzePanel';
+import { assessCall } from '../analyzer';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
@@ -36,6 +38,19 @@ const CHARLESTON_STEPS: { direction: CharlestonDirection; label: string; group: 
   { direction: 'right', label: 'Pass Right', group: 'Second Charleston' },
 ];
 
+/** Blind passes are allowed on the last pass of each Charleston (3rd and 6th). */
+function isBlindPassStep(step: number, playerCount: number): boolean {
+  return playerCount >= 3 && (step === 2 || step === 5);
+}
+
+// Player controls: every button shares one height and stays on one line.
+const CTRL_BTN = 'h-8 px-1.5 sm:px-2.5 shrink-0 rounded text-[0.6rem] uppercase tracking-wider whitespace-nowrap flex items-center justify-center gap-1 transition-all';
+// Width of each side-opponent column on phones: rack strip + seat label, and with an exposure column.
+const MOBILE_SIDE_COL = 30;
+const MOBILE_SIDE_COL_EXPOSED = 56;
+// Rack row height: lg tile (76) + room for a raised (selected) tile (14) + padding (16), so the bar never jumps.
+const RACK_ROW_MIN_HEIGHT = 106;
+
 interface GameBoardProps {
   config: GameConfig;
   onBackToSetup: () => void;
@@ -45,6 +60,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [game, setGame] = useState<GameState>(() => createGame(config));
   const [showHelp, setShowHelp] = useState(false);
   const [showNMJL, setShowNMJL] = useState(false);
+  const [showAnalyze, setShowAnalyze] = useState(false);
+  const [analyzeHoverId, setAnalyzeHoverId] = useState<string | null>(null);
+  const rackScrollRef = useRef<HTMLDivElement | null>(null);
+  const discardPoolRef = useRef<HTMLDivElement | null>(null);
   const [callCountdown, setCallCountdown] = useState<number | null>(null);
   const [planHands, setPlanHands] = useState<(PlanHand | null)[]>([null, null, null]);
   const [playerBarHeight, setPlayerBarHeight] = useState(0);
@@ -66,6 +85,25 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [blankTradeMode, setBlankTradeMode] = useState<{ blankIndex: number } | null>(null);
   const [jokerExchangeMode, setJokerExchangeMode] = useState(false);
   const [jokerExchangeOptions, setJokerExchangeOptions] = useState<JokerExchangeOption[]>([]);
+
+  // Keep the newest discard in view.
+  useEffect(() => {
+    const el = discardPoolRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [game.discardPool.length]);
+
+  // Bring the tile Analyze is pointing at into view on the rack.
+  useEffect(() => {
+    if (!analyzeHoverId) return;
+    const el = rackScrollRef.current?.querySelector<HTMLElement>(`[data-tile-id="${analyzeHoverId}"]`);
+    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [analyzeHoverId]);
+
+  // Phones: both side columns take the same width (wider once either side has
+  // exposures), so the discard pool and call panel stay on the screen's centre axis.
+  const mobileSideWidth = config.playerCount !== 2 && [game.players[1], game.players[3]].some(p => p && p.exposures.length > 0)
+    ? MOBILE_SIDE_COL_EXPOSED
+    : MOBILE_SIDE_COL;
 
   const humanPlayer = game.players[0];
   const tilesRemaining = game.wall.length;
@@ -128,26 +166,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     }
   }, []);
 
+  // The window closed (or the human passed): bots claim by the rules —
+  // Mahjong first, then exposures, next-in-turn breaking ties.
   const resolveCallingPhase = useCallback(() => {
-    setGame(prev => {
-      if (prev.phase !== 'playing' || prev.turnPhase !== 'calling') return prev;
-      if (prev.lastDiscardedBy === null) return passTurn(prev);
-      for (let offset = 1; offset < prev.config.playerCount; offset++) {
-        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-        if (canClaimMahJonggOnDiscard(prev, i)) {
-          return claimMahJonggOnDiscard(prev, i);
-        }
-      }
-      for (let offset = 1; offset < prev.config.playerCount; offset++) {
-        const i = (prev.lastDiscardedBy + offset) % prev.config.playerCount;
-        if (prev.players[i].isHuman) continue;
-        const aiCallSize = aiShouldCall(prev, i);
-        if (aiCallSize !== null) {
-          return callTile(prev, i, aiCallSize);
-        }
-      }
-      return passTurn(prev);
-    });
+    setGame(prev => resolveDiscardClaims(prev, null));
   }, []);
 
   const executePendingAction = useCallback((action: PendingAction) => {
@@ -439,13 +461,18 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const handleCall = useCallback((groupSize?: CallGroupSize) => {
     if (isPaused) return;
     clearPendingAction();
-    setGame(prev => callTile(prev, 0, groupSize));
+    setGame(prev => {
+      const size = groupSize ?? getCallOptions(prev, 0)[0]?.size;
+      if (size === undefined) return prev;
+      // A bot's Mahjong, or an earlier-in-turn bot call, still outranks this.
+      return resolveDiscardClaims(prev, { kind: 'expose', size });
+    });
   }, [isPaused, clearPendingAction]);
 
-  const handleClaimMahJongg = useCallback(() => {
+  const handleClaimMahjong = useCallback(() => {
     if (isPaused) return;
     clearPendingAction();
-    setGame(prev => claimMahJonggOnDiscard(prev, 0));
+    setGame(prev => resolveDiscardClaims(prev, { kind: 'mahjong' }));
   }, [isPaused, clearPendingAction]);
 
   // Handle ignoring a discarded tile
@@ -548,10 +575,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     setGame(prev => swapTileBetweenRacks(prev, 0, fromRack, tileIndex));
   }, [isPaused, game.players]);
 
-  // Declare Mah Jongg
-  const handleDeclareMahJongg = useCallback(() => {
+  // Declare Mahjong
+  const handleDeclareMahjong = useCallback(() => {
     if (isPaused) return;
-    setGame(prev => declareMahJongg(prev, 0));
+    setGame(prev => declareMahjong(prev, 0));
   }, [isPaused]);
 
   const hasPlanHands = planHands.some(p => p !== null);
@@ -564,7 +591,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const humanCallOptions: CallOption[] = isCallingPhase ? getCallOptions(game, 0) : [];
   const humanCanCall = humanCallOptions.length > 0;
-  const humanCanClaimDiscardMahJongg = isCallingPhase ? canClaimMahJonggOnDiscard(game, 0) : false;
+  // Tips mode: say what each possible call would do to your hand.
+  const callCoaching = tipsEnabled && humanCanCall
+    ? humanCallOptions.map(o => assessCall(game, 0, o.size)).filter((a): a is NonNullable<typeof a> => a !== null)
+    : [];
+  const humanCanClaimDiscardMahjong = isCallingPhase ? canClaimMahjongOnDiscard(game, 0) : false;
   const hasSkippableWait = !!pendingAction && !isPaused && (
     pendingAction.kind === 'call-window' ||
     pendingAction.kind === 'human-draw' ||
@@ -629,29 +660,28 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   const handleCharlestonPass = useCallback(() => {
     if (isPaused) return;
-    if (charlestonSelected.length !== 3) return;
     const stepInfo = CHARLESTON_STEPS[charlestonStep];
     if (!stepInfo) return;
+    const blindAllowed = isBlindPassStep(charlestonStep, config.playerCount);
+    if (charlestonSelected.length !== 3 && !(blindAllowed && charlestonSelected.length < 3)) return;
 
-    setGame(prev => {
-      const toIndex = getPassTarget(0, stepInfo.direction, config.playerCount);
-      const result = executeCharlestonPass(
-        prev.players,
-        0,
-        toIndex,
-        charlestonSelected,
-        stepInfo.direction,
-        config.playerCount,
-        prev.wall
-      );
-      return {
-        ...prev,
-        players: result.players,
-        wall: result.wall ?? prev.wall,
-      };
+    // Everyone passes at once; you receive from the player on the other side.
+    const result = executeCharlestonRound(
+      game.players, charlestonSelected, stepInfo.direction, config.playerCount, game.wall,
+      { blindAllowed, skill: config.botSkillLevel },
+    );
+    if (result.players === game.players) return;
+    const blindNote = result.blindForwarded > 0
+      ? ` You blind-passed ${result.blindForwarded} tile${result.blindForwarded === 1 ? '' : 's'} without looking.`
+      : '';
+    setGame({
+      ...game,
+      players: result.players,
+      wall: result.wall ?? game.wall,
+      message: `Passed ${stepInfo.direction}. You received ${result.humanReceived.length} tile${result.humanReceived.length === 1 ? '' : 's'}.${blindNote}`,
     });
 
-    setCharlestonReceivedCount(3);
+    setCharlestonReceivedCount(result.humanReceived.length);
     setCharlestonSelected([]);
 
     // Decide next sub-phase
@@ -668,7 +698,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       setCharlestonSubPhase('passed');
       schedulePendingAction('charleston-next-pass', CHARLESTON_PASS_DELAY_MS);
     }
-  }, [isPaused, charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, schedulePendingAction]);
+  }, [isPaused, game, charlestonSelected, charlestonStep, goToCourtesyOrPlay, config.playerCount, config.botSkillLevel, schedulePendingAction]);
 
   // Courtesy pass handler
   const handleCourtesyPass = useCallback(() => {
@@ -678,57 +708,21 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       startPlaying();
       return;
     }
-    const oppositeIndex = getPassTarget(0, 'across', config.playerCount);
-    if (oppositeIndex < 0) {
-      setGame(prev => {
-        const result = executeCharlestonPass(
-          prev.players,
-          0,
-          oppositeIndex,
-          charlestonSelected,
-          'across',
-          config.playerCount,
-          prev.wall
-        );
-        return {
-          ...prev,
-          players: result.players,
-          wall: result.wall ?? prev.wall,
-        };
-      });
-      setCharlestonSelected([]);
-      schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
-      return;
-    }
-
-    setGame(prev => {
-      const newPlayers = prev.players.map(p => ({ ...p, hand: [...p.hand] }));
-
-      // Human's selected tiles
-      const humanTiles = charlestonSelected.map(idx => newPlayers[0].hand[idx]);
-
-      // AI selects same number of tiles to exchange
-      const aiCandidates = aiSelectCharlestonTiles(newPlayers[oppositeIndex].hand);
-      const aiIndices = aiCandidates.slice(0, charlestonSelected.length);
-      const aiTiles = aiIndices.map(idx => newPlayers[oppositeIndex].hand[idx]);
-
-      // Remove from both hands
-      const humanPassedIds = new Set(humanTiles.map(t => t.id));
-      newPlayers[0].hand = newPlayers[0].hand.filter(t => !humanPassedIds.has(t.id));
-
-      const aiPassedIds = new Set(aiTiles.map(t => t.id));
-      newPlayers[oppositeIndex].hand = newPlayers[oppositeIndex].hand.filter(t => !aiPassedIds.has(t.id));
-
-      // Swap
-      newPlayers[0].hand.push(...aiTiles);
-      newPlayers[oppositeIndex].hand.push(...humanTiles);
-
-      return { ...prev, players: newPlayers };
+    // Each side names 0–3 tiles; the pair trades the smaller number.
+    const result = executeCourtesyPass(game.players, charlestonSelected, config.playerCount, game.wall, config.botSkillLevel);
+    const partnerName = result.partnerIndex >= 0 ? game.players[result.partnerIndex].name : 'the pile';
+    const offered = charlestonSelected.length;
+    setGame({
+      ...game,
+      players: result.players,
+      wall: result.wall ?? game.wall,
+      message: result.exchanged === offered
+        ? `Courtesy pass: traded ${result.exchanged} tile${result.exchanged === 1 ? '' : 's'} with ${partnerName}.`
+        : `Courtesy pass: ${partnerName} offered only ${result.exchanged}, so you traded ${result.exchanged} and kept the rest.`,
     });
-
     setCharlestonSelected([]);
     schedulePendingAction('charleston-start-playing', CHARLESTON_COMPLETE_DELAY_MS);
-  }, [isPaused, charlestonSelected, config.playerCount, schedulePendingAction, startPlaying]);
+  }, [isPaused, game, charlestonSelected, config.playerCount, config.botSkillLevel, schedulePendingAction, startPlaying]);
 
   const handleContinueCharleston = useCallback(() => {
     if (isPaused) return;
@@ -761,7 +755,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     <DndProvider backend={HTML5Backend}>
     <div className="flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif", height: '100dvh', minHeight: '100dvh' }}>
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
+      <div className="relative flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
         <div className="flex items-center gap-2">
           <button
             onClick={onBackToSetup}
@@ -780,34 +774,39 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           </button>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <span style={{
-            color: '#FFFDF7',
-            fontFamily: "'Futura', 'Trebuchet MS', sans-serif",
-            fontSize: '1.1rem',
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            lineHeight: 1,
-          }}>
-            Otto Online
-          </span>
-        </div>
+        {/* NMJL Card — centred on the screen, the most-used reference during play */}
+        <button
+          onClick={() => setShowNMJL(true)}
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1 rounded text-[0.7rem] uppercase tracking-wider whitespace-nowrap flex items-center gap-1.5 transition-all hover:brightness-110"
+          style={{ background: '#B5704F', color: '#FFFDF7', fontWeight: 600, boxShadow: '0 2px 8px rgba(181,112,79,0.35)' }}
+          title="Open the NMJL card"
+          aria-label="NMJL Card"
+        >
+          <BookOpen size={13} />
+          <span><span className="hidden sm:inline">NMJL </span>Card</span>
+        </button>
 
         <div className="flex items-center gap-2">
+          {/* Your seat — lives here on phones so the controls row fits */}
+          <span className="sm:hidden px-2 py-0.5 rounded text-[0.6rem] uppercase" style={{
+            background: 'rgba(255,253,247,0.1)', color: '#FFFDF7', fontWeight: 600, letterSpacing: '0.08em',
+          }} title="Your seat">
+            {humanPlayer.seatWind}
+          </span>
           {canPauseGame && (
             <button
               onClick={handlePauseToggle}
-              className="px-3 py-1 rounded text-[0.65rem] uppercase tracking-wider transition-colors hover:bg-white/10 flex items-center gap-1.5"
+              className="px-2 sm:px-3 py-1 rounded text-[0.65rem] uppercase tracking-wider transition-colors hover:bg-white/10 flex items-center gap-1.5"
+              aria-label={isPaused ? 'Resume game' : 'Pause game'}
               style={{ color: isPaused ? '#FFFDF7' : '#D4A574', border: '1px solid rgba(212,165,116,0.3)', background: isPaused ? 'rgba(181,112,79,0.35)' : 'transparent' }}
               title={isPaused ? 'Resume game' : 'Pause game'}
             >
               {isPaused ? <Play size={12} /> : <Pause size={12} />}
-              {isPaused ? 'Resume' : 'Pause'}
+              <span className="hidden sm:inline">{isPaused ? 'Resume' : 'Pause'}</span>
             </button>
           )}
           {tipsEnabled && (
-            <span className="text-[0.55rem] px-2 py-0.5 rounded-full flex items-center gap-1" style={{
+            <span className="hidden sm:flex text-[0.55rem] px-2 py-0.5 rounded-full items-center gap-1" style={{
               background: 'rgba(45,106,79,0.25)',
               color: '#8BB59E',
               border: '1px solid rgba(45,106,79,0.35)',
@@ -825,17 +824,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             {siamese ? 'Siamese' : `${config.playerCount}P`} &middot; {config.totalTiles} tiles &middot; {config.jokerCount}J
           </span>
           <button
-            onClick={() => setShowNMJL(true)}
-            className="p-1.5 rounded transition-colors hover:bg-white/10"
-            style={{ color: '#D4A574' }}
-            title="NMJL Card"
-          >
-            <BookOpen size={14} />
-          </button>
-          <button
             onClick={() => setShowHelp(!showHelp)}
             className="p-1.5 rounded transition-colors hover:bg-white/10"
             style={{ color: '#D4A574' }}
+            aria-label="Help"
           >
             <HelpCircle size={14} />
           </button>
@@ -881,13 +873,14 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[3]}
                 isActive={game.currentPlayerIndex === 3}
                 side="left"
+                mobileMinWidth={mobileSideWidth}
                 showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 3 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
               />
             )}
             {config.playerCount === 3 && (
-              <GhostWall />
+              <GhostWall mobileWidth={mobileSideWidth} />
             )}
 
             {/* Center: Charleston / Discard Pool + Actions
@@ -909,6 +902,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   onEnd={handleEndCharleston}
                   onCourtesyPass={handleCourtesyPass}
                   onCourtesySkip={startPlaying}
+                  blindAllowed={isBlindPassStep(charlestonStep, config.playerCount)}
+                  lastPassNote={/^(Passed|Courtesy pass)/.test(game.message) ? game.message : undefined}
                   DirectionIcon={DirectionIcon}
                 />
               ) : (
@@ -953,12 +948,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   {/* Discard Area
                       Mobile maxHeight is capped so the bottom rack and controls
                       stay in view while the center discard field remains readable. */}
-                  <div className="rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
+                  <div ref={discardPoolRef} className="discard-pool rounded-lg p-2 sm:p-3 w-full max-w-lg overflow-auto" style={{
                     background: blankTradeMode ? 'rgba(181,112,79,0.2)' : 'rgba(255,253,247,0.1)',
                     border: blankTradeMode ? '2px solid rgba(181,112,79,0.6)' : '1px solid rgba(255,253,247,0.12)',
-                    maxHeight: config.playerCount >= 3 ? 'min(34dvh, 18rem)' : 'min(42dvh, 20rem)',
-                    transition: 'all 0.2s ease',
-                  }}>
+                    ['--pool-max' as string]: config.playerCount >= 3 ? 'min(34dvh, 18rem)' : 'min(42dvh, 20rem)',
+                    transition: 'background 0.2s ease, border-color 0.2s ease',
+                  } as React.CSSProperties}>
                     <div className="flex flex-wrap gap-1 justify-center min-h-[50px]">
                       {game.discardPool.length === 0 ? (
                         <div className="flex items-center justify-center w-full py-6" style={{
@@ -1017,9 +1012,9 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           }}>{callCountdown ?? 0}</span>
                         </div>
                         <div className="flex flex-col gap-1.5">
-                          {humanCanClaimDiscardMahJongg && (
+                          {humanCanClaimDiscardMahjong && (
                             <button
-                              onClick={handleClaimMahJongg}
+                              onClick={handleClaimMahjong}
                               className="px-4 py-2 rounded transition-all uppercase tracking-wider hover:brightness-110"
                               style={{
                                 background: '#2D6A4F',
@@ -1030,7 +1025,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                                 lineHeight: 1.1,
                               }}
                             >
-                              Mah Jongg!
+                              Mahjong!
                             </button>
                           )}
                           {humanCanCall && (
@@ -1074,6 +1069,19 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                                   </button>
                                 ))}
                               </div>
+                              {callCoaching.length > 0 && (
+                                <div className="flex flex-col gap-0.5 mt-1" style={{ maxWidth: 240 }}>
+                                  {callCoaching.map(a => (
+                                    <p key={a.size} style={{
+                                      fontSize: '0.55rem', lineHeight: 1.35,
+                                      color: !a.fits ? '#E8A39D' : a.improves ? '#8BB59E' : 'rgba(255,253,247,0.6)',
+                                    }}>
+                                      <Lightbulb size={8} className="inline mr-1" style={{ verticalAlign: 'middle' }} />
+                                      {a.message}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                           <button onClick={handleIgnore}
@@ -1107,6 +1115,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 player={game.players[1]}
                 isActive={game.currentPlayerIndex === 1}
                 side="right"
+                mobileMinWidth={mobileSideWidth}
                 showDrawGap={game.phase === 'playing' && game.currentPlayerIndex === 1 && game.turnPhase === 'discarding'}
                 clickableJokerIds={clickableJokerIds}
                 onJokerClick={handleJokerExchangeSelect}
@@ -1162,35 +1171,54 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         {/* Player's Area */}
         <div ref={playerBarRef} className="sticky bottom-0 z-20 shrink-0" style={{ background: '#FFFDF7', borderTop: '3px solid #B5704F', paddingBottom: 'env(safe-area-inset-bottom)' }}>
           {/* Controls — py reduced on mobile to keep full player area on-screen */}
-          <div className="flex items-center justify-between px-2 sm:px-3 py-0.5 sm:py-1" style={{
+          <div className="flex items-center justify-between gap-1 px-2 sm:px-3 py-1" style={{
             borderBottom: '1px solid rgba(27,42,74,0.06)',
           }}>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
+              <ArrowUpDown size={12} className="sm:hidden shrink-0" style={{ color: '#6B5E4F' }} aria-hidden />
               <button
                 onClick={() => handleSort('rank')}
-                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-colors hover:bg-[#F5F0E6]"
+                className={`${CTRL_BTN} hover:bg-[#F5F0E6]`}
                 style={{ color: '#1B2A4A', border: '1px solid rgba(27,42,74,0.12)' }}
+                aria-label="Sort by rank"
               >
-                Sort Rank
+                <span className="hidden sm:inline">Sort </span>Rank
               </button>
               <button
                 onClick={() => handleSort('suit')}
-                className="px-2.5 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-colors hover:bg-[#F5F0E6]"
+                className={`${CTRL_BTN} hover:bg-[#F5F0E6]`}
                 style={{ color: '#1B2A4A', border: '1px solid rgba(27,42,74,0.12)' }}
+                aria-label="Sort by suit"
               >
-                Sort Suit
+                <span className="hidden sm:inline">Sort </span>Suit
+              </button>
+              <button
+                onClick={() => setShowAnalyze((v) => !v)}
+                className={`${CTRL_BTN} hover:brightness-110`}
+                style={{
+                  background: showAnalyze ? '#1B2A4A' : '#B5704F',
+                  color: '#FFFDF7',
+                  fontWeight: 600,
+                  border: `2px solid ${showAnalyze ? '#D4A574' : 'transparent'}`,
+                }}
+                title="Strategy analysis for this hand"
+                aria-label="Analyze"
+                aria-pressed={showAnalyze}
+              >
+                <Lightbulb size={12} />
+                <span className="hidden sm:inline">Analyze</span>
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
               <div className="relative">
                 <button
-                  className={`px-3 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110 ${jokerExchangeTipActive ? 'animate-pulse' : ''}`}
+                  className={`${CTRL_BTN} hover:brightness-110 ${jokerExchangeTipActive ? 'animate-pulse' : ''}`}
                   style={{
                     background: jokerExchangeMode ? '#1B2A4A' : jokerExchangeTipActive ? '#B5704F' : '#2D6A4F',
                     color: '#FFFDF7',
                     fontWeight: 600,
-                    border: jokerExchangeMode ? '2px solid #B5704F' : jokerExchangeTipActive ? '2px solid #D4A574' : 'none',
+                    border: `2px solid ${jokerExchangeMode ? '#B5704F' : jokerExchangeTipActive ? '#D4A574' : 'transparent'}`,
                     boxShadow: jokerExchangeMode
                       ? '0 0 8px rgba(181,112,79,0.4)'
                       : jokerExchangeTipActive
@@ -1224,9 +1252,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 )}
               </div>
               <button
-                className="px-4 py-0.5 rounded text-[0.6rem] uppercase tracking-wider transition-all hover:brightness-110"
+                className={`${CTRL_BTN} hover:brightness-110`}
                 style={{
                   background: game.phase === 'gameOver' ? '#2D6A4F' : '#C4453E',
+                  border: '2px solid transparent',
                   color: '#FFFDF7',
                   fontWeight: 600,
                   cursor: 'pointer',
@@ -1235,17 +1264,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                   if (game.phase === 'gameOver') {
                     handleNewGame();
                   } else if (game.phase === 'playing') {
-                    handleDeclareMahJongg();
+                    handleDeclareMahjong();
                   }
                 }}
               >
                 {game.phase === 'gameOver'
                   ? (game.winner === 0 ? 'You Win!' : 'Game Over')
-                  : 'Mah Jongg!'}
+                  : 'Mahjong!'}
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="hidden sm:flex items-center gap-1.5">
               <div className="px-2 py-0.5 rounded" style={{
                 background: '#F5F0E6',
                 fontSize: '0.6rem',
@@ -1299,7 +1328,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                           background: 'rgba(45,106,79,0.12)',
                           color: '#2D6A4F',
                         }}>
-                          Mah Jongg locked
+                          Mahjong locked
                         </span>
                       )}
                       <span className="text-[0.45rem] px-1.5 py-0.5 rounded" style={{
@@ -1323,11 +1352,12 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                       )}
                     </div>
                     {/* Tiles */}
-                    <div className="flex items-end justify-center gap-0.5 px-2 py-1 overflow-x-auto" style={{
+                    <div className="px-2 py-1 overflow-x-auto" style={{
                       opacity: rackLocked ? 0.9 : isActive ? 1 : 0.6,
                       filter: rackLocked ? 'none' : isActive ? 'none' : 'grayscale(0.3)',
                       minHeight: isActive ? 'auto' : 40,
                     }}>
+                    <div className="flex items-end gap-0.5 w-max mx-auto">
                       {rackHand.map((tile, index) => {
                         if (isActive && !rackLocked) {
                           return (
@@ -1373,45 +1403,62 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         );
                       })}
                     </div>
+                    </div>
                   </div>
                 );
               })}
             </div>
           ) : (
             /* ─── Standard Single Rack ─── */
-            <div className="flex items-end justify-center gap-0.5 px-2 py-2 overflow-x-auto">
+            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT }}>
+              <div className="flex items-end gap-0.5 w-max mx-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT - 16 }}>
               {humanPlayer.hand.map((tile, index) => {
                 const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(index);
+                const isAnalyzeHovered = analyzeHoverId === tile.id;
                 return (
-                  <DraggableHandTile
+                  <div
                     key={tile.id}
-                    index={index}
-                    tileId={tile.id}
-                    moveTile={handleMoveTile}
-                    onClick={() => handleTileClick(index)}
+                    data-tile-id={tile.id}
+                    className="relative"
+                    style={isAnalyzeHovered ? {
+                      outline: '3px solid #B5704F',
+                      outlineOffset: 2,
+                      borderRadius: 6,
+                      zIndex: 5,
+                      transition: 'outline 0.1s ease',
+                    } : { transition: 'outline 0.1s ease' }}
                   >
-                    <TileComponent
-                      tile={tile}
-                      size="lg"
-                      selected={isCharlestonSelected || game.selectedTileIndex === index}
-                      selectedColor={isCharlestonSelected ? '#B5704F' : undefined}
-                      interactive
-                    />
-                    {isCharlestonSelected && (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center z-10"
-                        style={{ background: '#B5704F', border: '2px solid #FFFDF7', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
-                        <span style={{ color: '#FFFDF7', fontSize: '0.5rem', fontWeight: 700 }}>
-                          {charlestonSelected.indexOf(index) + 1}
-                        </span>
-                      </div>
-                    )}
-                  </DraggableHandTile>
+                    <DraggableHandTile
+                      index={index}
+                      tileId={tile.id}
+                      moveTile={handleMoveTile}
+                      onClick={() => handleTileClick(index)}
+                    >
+                      <TileComponent
+                        tile={tile}
+                        size="lg"
+                        selected={isCharlestonSelected || game.selectedTileIndex === index}
+                        selectedColor={isCharlestonSelected ? '#B5704F' : undefined}
+                        interactive
+                      />
+                      {isCharlestonSelected && (
+                        <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center z-10"
+                          style={{ background: '#B5704F', border: '2px solid #FFFDF7', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
+                          <span style={{ color: '#FFFDF7', fontSize: '0.5rem', fontWeight: 700 }}>
+                            {charlestonSelected.indexOf(index) + 1}
+                          </span>
+                        </div>
+                      )}
+                    </DraggableHandTile>
+                  </div>
                 );
               })}
+              </div>
             </div>
           )}
 
-          {/* Hint */}
+          {/* Hint — fixed-height row so the bar keeps its position in every state */}
+          <div className="px-2 overflow-hidden whitespace-nowrap [&>div]:truncate" style={{ height: 18 }}>
           {game.phase === 'charleston' && charlestonSubPhase === 'selecting' && (
             <div className="text-center pb-1" style={{
               color: '#B5704F',
@@ -1464,6 +1511,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 : 'Click to select \u00b7 Drag to reorder'}
             </div>
           )}
+
+          </div>
 
           {/* Plan Bar - Quick Reference Hands */}
           <div className="px-2 pb-1.5 overflow-x-auto" style={{
@@ -1683,7 +1732,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Claiming Discards</p>
                 <p>When an opponent discards, you have <strong style={{ color: '#1B2A4A' }}>{callWindowSeconds} seconds</strong> to claim. You can use matching tiles and/or Jokers from your hand to form the group.</p>
                 <p><strong style={{ color: '#1B2A4A' }}>Group sizes:</strong> Choose Pung (3), Kong (4), Quint (5), or Sextet (6) when calling. Each button shows how many Jokers will be used.</p>
-                <p><strong style={{ color: '#1B2A4A' }}>Priority:</strong> Mah Jongg claims always beat exposure claims. For equal claims, next-in-turn has preference.</p>
+                <p><strong style={{ color: '#1B2A4A' }}>Priority:</strong> Mahjong claims always beat exposure claims. For equal claims, next-in-turn has preference.</p>
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
@@ -1694,11 +1743,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Winning</p>
-                <p>Declare <strong style={{ color: '#1B2A4A' }}>Mah Jongg</strong> when your hand matches a pattern on the NMJL card. Any tile except a Joker may be called for Mah Jongg.</p>
+                <p>Declare <strong style={{ color: '#1B2A4A' }}>Mahjong</strong> when your hand matches a pattern on the NMJL card. Any tile except a Joker may be called for Mahjong.</p>
                 {config.playerCount === 2 && (
-                  <p>In Siamese, you can lock a completed rack with Mah Jongg and keep playing the other rack. You win the game once both racks are complete.</p>
+                  <p>In Siamese, you can lock a completed rack with Mahjong and keep playing the other rack. You win the game once both racks are complete.</p>
                 )}
-                <p>Click <BookOpen size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> in the top bar to view the NMJL reference card and plan hands.</p>
+                <p>Tap <strong style={{ color: '#1B2A4A' }}>Card</strong> at the top of the screen to view the NMJL reference card and plan hands.</p>
               </div>
             </div>
           </div>
@@ -1725,6 +1774,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         </div>
       )}
 
+      {/* Analyze side panel */}
+      <AnalyzePanel
+        open={showAnalyze}
+        game={game}
+        playerIndex={0}
+        rack={activeRack}
+        playerBarHeight={playerBarHeight}
+        onClose={() => { setShowAnalyze(false); setAnalyzeHoverId(null); }}
+        onTileHover={setAnalyzeHoverId}
+      />
+
       {/* Game Over Modal */}
       {game.phase === 'gameOver' && (
         <GameOverModal
@@ -1735,6 +1795,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           onSettings={onBackToSetup}
           planHands={planHands}
           isSiamese={siamese}
+          winInfo={game.winInfo}
         />
       )}
     </div>
@@ -1758,6 +1819,8 @@ function CharlestonUI({
   onCourtesyPass,
   onCourtesySkip,
   DirectionIcon,
+  blindAllowed = false,
+  lastPassNote,
 }: {
   subPhase: string;
   stepInfo: { direction: string; label: string; group: string };
@@ -1773,9 +1836,16 @@ function CharlestonUI({
   onCourtesyPass: () => void;
   onCourtesySkip: () => void;
   DirectionIcon: React.ElementType;
+  blindAllowed?: boolean;
+  lastPassNote?: string;
 }) {
+  const canPass = subPhase !== 'passed' && (charlestonSelected.length === 3 || (blindAllowed && charlestonSelected.length < 3));
+  const blindCount = 3 - charlestonSelected.length;
   return (
     <div className="flex flex-col items-center gap-3 w-full max-w-md">
+      {lastPassNote && subPhase !== 'pre' && subPhase !== 'selecting' && (
+        <p className="text-center" style={{ color: '#8BB59E', fontSize: '0.65rem' }}>{lastPassNote}</p>
+      )}
       {subPhase === 'pre' && (
         <div className="rounded-lg p-5 text-center" style={{
           background: 'rgba(0,0,0,0.35)',
@@ -1911,32 +1981,36 @@ function CharlestonUI({
                   </div>
                 ))}
               </div>
-              <span style={{
-                color: charlestonSelected.length === 3 ? '#8BB59E' : 'rgba(255,253,247,0.5)',
-                fontSize: '0.65rem',
-              }}>
-                {subPhase === 'passed'
-                  ? 'Tiles passed! Received 3 new tiles.'
-                  : `${charlestonSelected.length}/3 tiles selected`}
-              </span>
             </div>
 
             <button
               onClick={onPass}
-              disabled={charlestonSelected.length !== 3 || subPhase === 'passed'}
-              className="px-5 py-1.5 rounded uppercase tracking-wider transition-all"
+              disabled={!canPass}
+              className="px-5 py-1.5 rounded uppercase tracking-wider transition-all whitespace-nowrap"
+              title={blindAllowed && blindCount > 0 ? `Pass ${charlestonSelected.length} of yours and ${blindCount} unseen from the tiles coming to you` : undefined}
               style={{
-                background: charlestonSelected.length === 3 && subPhase !== 'passed' ? '#B5704F' : 'rgba(255,253,247,0.08)',
-                color: charlestonSelected.length === 3 && subPhase !== 'passed' ? '#FFFDF7' : 'rgba(255,253,247,0.3)',
+                background: canPass ? '#B5704F' : 'rgba(255,253,247,0.08)',
+                color: canPass ? '#FFFDF7' : 'rgba(255,253,247,0.3)',
                 fontSize: '0.7rem',
                 fontWeight: 600,
-                cursor: charlestonSelected.length === 3 && subPhase !== 'passed' ? 'pointer' : 'default',
-                boxShadow: charlestonSelected.length === 3 && subPhase !== 'passed' ? '0 2px 8px rgba(181,112,79,0.4)' : 'none',
+                cursor: canPass ? 'pointer' : 'default',
+                boxShadow: canPass ? '0 2px 8px rgba(181,112,79,0.4)' : 'none',
               }}
             >
-              Pass Tiles
+              {blindAllowed && blindCount > 0 ? `Blind Pass · ${blindCount}` : 'Pass Tiles'}
             </button>
           </div>
+
+          <p className="mt-2" style={{
+            color: charlestonSelected.length === 3 ? '#8BB59E' : 'rgba(255,253,247,0.5)',
+            fontSize: '0.65rem',
+          }}>
+            {subPhase === 'passed'
+              ? 'Tiles passed!'
+              : blindAllowed && blindCount > 0
+                ? `${charlestonSelected.length}/3 tiles selected · ${blindCount} will be passed on unseen`
+                : `${charlestonSelected.length}/3 tiles selected`}
+          </p>
 
           <p className="mt-2 text-center" style={{
             color: 'rgba(255,253,247,0.35)',
@@ -1945,7 +2019,9 @@ function CharlestonUI({
           }}>
             {subPhase === 'passed'
               ? 'Preparing next pass...'
-              : 'Click tiles in your hand below to select them for passing'}
+              : blindAllowed
+                ? 'Last pass of this Charleston: select up to 3 — any you leave out are passed on, unseen, from the tiles coming to you'
+                : 'Click tiles in your hand below to select them for passing'}
           </p>
         </div>
       )}
@@ -2227,14 +2303,16 @@ function MobileSideConcealedRack({
 
   const tileAngle = side === 'left' ? 90 : -90;
   const totalHeight = 32 + Math.max(0, tileCount - 1) * MOBILE_SIDE_RACK_STEP + (showDrawGap && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
-  const tileLeft = side === 'left' ? -(44 - MOBILE_SIDE_RACK_MASK_WIDTH) : -1;
+  // A rotated, scaled tile draws from (left - 3.8) to (left + 35.8). Show its
+  // inner 10px on both sides: right edge at 10 on the left rack, left edge at 0 on the right.
+  const tileLeft = side === 'left' ? MOBILE_SIDE_RACK_MASK_WIDTH - 36 : 4;
 
   return (
     <div
-      className="shrink-0 overflow-y-auto"
+      className="shrink-0 overflow-y-auto overflow-x-hidden flex flex-col"
       style={{ width: MOBILE_SIDE_RACK_MASK_WIDTH, minWidth: MOBILE_SIDE_RACK_MASK_WIDTH }}
     >
-      <div className="relative" style={{ width: 44, height: totalHeight }}>
+      <div className="relative my-auto shrink-0" style={{ width: 44, height: totalHeight }}>
         {Array.from({ length: tileCount }).map((_, i) => {
           const top = i * MOBILE_SIDE_RACK_STEP + (showDrawGap && i === tileCount - 1 && tileCount > 1 ? MOBILE_DRAW_TILE_GAP : 0);
           return (
@@ -2334,12 +2412,14 @@ function OpponentColumn({
   isActive,
   side,
   showDrawGap = false,
+  mobileMinWidth,
   clickableJokerIds,
   onJokerClick,
 }: {
   player: any;
   isActive: boolean;
   side: 'left' | 'right';
+  mobileMinWidth?: number;
   showDrawGap?: boolean;
   clickableJokerIds?: Set<string>;
   onJokerClick?: (id: string) => void;
@@ -2383,7 +2463,7 @@ function OpponentColumn({
         )}
       </div>
 
-      <div className="sm:hidden flex items-stretch gap-1 py-1 h-full">
+      <div className={`sm:hidden flex items-stretch gap-1 py-1 h-full ${side === 'right' ? 'justify-end' : 'justify-start'}`} style={{ minWidth: mobileMinWidth }}>
         {side === 'left' && <MobileSideConcealedRack tileCount={player.hand.length} side={side} showDrawGap={showDrawGap} />}
         <div className="flex flex-col items-center justify-center gap-2 min-h-0">
           <div className="flex flex-col items-center gap-1">
@@ -2524,11 +2604,11 @@ function SiameseOpponentRow({
 
 // ─── Ghost Wall (3-player: indicates the empty 4th seat) ────────────
 
-function GhostWall() {
+function GhostWall({ mobileWidth = 6 }: { mobileWidth?: number }) {
   return (
     <div className="shrink-0">
       {/* Mobile: just a hairline placeholder so the flex row still has a left column */}
-      <div className="sm:hidden h-full" style={{ width: 6, background: 'rgba(255,253,247,0.02)' }} />
+      <div className="sm:hidden h-full" style={{ width: mobileWidth, background: 'rgba(255,253,247,0.02)' }} />
       {/* Desktop: labelled ghost column */}
       <div className="hidden sm:flex items-center justify-center py-2 px-2 h-full" style={{ width: 48 }}>
         <div className="flex flex-col items-center gap-1.5">

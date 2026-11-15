@@ -70,6 +70,33 @@ export interface GameState {
   winner: number | null;
   selectedTileIndex: number | null;
   activeRack: 1 | 2; // Which rack is active (Siamese 2-player mode)
+  /** How the current player's turn began: drawing from the wall, or calling a discard. */
+  turnSource?: 'draw' | 'call';
+  /** Who discarded the tile the current player called (when turnSource is 'call'). */
+  lastCallFrom?: number | null;
+  /** True when the current player's last action was a joker exchange (a Mahjong then counts as self-drawn). */
+  lastActionWasJokerExchange?: boolean;
+  /** Set when someone wins: the hand, its value, and who pays what. */
+  winInfo?: WinInfo | null;
+}
+
+export interface WinPayment {
+  playerIndex: number;
+  amount: number;
+}
+
+export interface WinInfo {
+  winnerIndex: number;
+  handId: string;
+  handLabel: string;
+  sectionName: string;
+  basePoints: number;
+  jokerless: boolean;
+  value: number;             // basePoints, doubled when jokerless (not Singles & Pairs)
+  selfDrawn: boolean;
+  discarderIndex: number | null;
+  payments: WinPayment[];    // what each other player pays the winner
+  total: number;
 }
 
 export function getTileName(tile: Tile): string {
