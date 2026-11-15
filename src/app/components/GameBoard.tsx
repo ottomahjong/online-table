@@ -755,7 +755,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     <DndProvider backend={HTML5Backend}>
     <div className="flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif", height: '100dvh', minHeight: '100dvh' }}>
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
+      <div className="relative flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
         <div className="flex items-center gap-2">
           <button
             onClick={onBackToSetup}
@@ -772,15 +772,27 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           >
             <RotateCcw size={14} />
           </button>
+        </div>
+
+        {/* NMJL Card — centred on the screen, the most-used reference during play */}
+        <button
+          onClick={() => setShowNMJL(true)}
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1 rounded text-[0.7rem] uppercase tracking-wider whitespace-nowrap flex items-center gap-1.5 transition-all hover:brightness-110"
+          style={{ background: '#B5704F', color: '#FFFDF7', fontWeight: 600, boxShadow: '0 2px 8px rgba(181,112,79,0.35)' }}
+          title="Open the NMJL card"
+          aria-label="NMJL Card"
+        >
+          <BookOpen size={13} />
+          <span><span className="hidden sm:inline">NMJL </span>Card</span>
+        </button>
+
+        <div className="flex items-center gap-2">
           {/* Your seat — lives here on phones so the controls row fits */}
           <span className="sm:hidden px-2 py-0.5 rounded text-[0.6rem] uppercase" style={{
             background: 'rgba(255,253,247,0.1)', color: '#FFFDF7', fontWeight: 600, letterSpacing: '0.08em',
           }} title="Your seat">
             {humanPlayer.seatWind}
           </span>
-        </div>
-
-        <div className="flex items-center gap-2">
           {canPauseGame && (
             <button
               onClick={handlePauseToggle}
@@ -794,7 +806,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             </button>
           )}
           {tipsEnabled && (
-            <span className="text-[0.55rem] px-2 py-0.5 rounded-full flex items-center gap-1" style={{
+            <span className="hidden sm:flex text-[0.55rem] px-2 py-0.5 rounded-full items-center gap-1" style={{
               background: 'rgba(45,106,79,0.25)',
               color: '#8BB59E',
               border: '1px solid rgba(45,106,79,0.35)',
@@ -812,17 +824,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             {siamese ? 'Siamese' : `${config.playerCount}P`} &middot; {config.totalTiles} tiles &middot; {config.jokerCount}J
           </span>
           <button
-            onClick={() => setShowNMJL(true)}
-            className="p-1.5 rounded transition-colors hover:bg-white/10"
-            style={{ color: '#D4A574' }}
-            title="NMJL Card"
-          >
-            <BookOpen size={14} />
-          </button>
-          <button
             onClick={() => setShowHelp(!showHelp)}
             className="p-1.5 rounded transition-colors hover:bg-white/10"
             style={{ color: '#D4A574' }}
+            aria-label="Help"
           >
             <HelpCircle size={14} />
           </button>
@@ -1742,7 +1747,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 {config.playerCount === 2 && (
                   <p>In Siamese, you can lock a completed rack with Mahjong and keep playing the other rack. You win the game once both racks are complete.</p>
                 )}
-                <p>Click <BookOpen size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> in the top bar to view the NMJL reference card and plan hands.</p>
+                <p>Tap <strong style={{ color: '#1B2A4A' }}>Card</strong> at the top of the screen to view the NMJL reference card and plan hands.</p>
               </div>
             </div>
           </div>
