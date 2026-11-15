@@ -49,6 +49,7 @@ const MOBILE_SIDE_COL = 30;
 const MOBILE_SIDE_COL_EXPOSED = 56;
 // Rack row height: lg tile (76) + room for a raised (selected) tile (14) + padding (16), so the bar never jumps.
 const RACK_ROW_MIN_HEIGHT = 106;
+const RACK_GAP = 2;
 
 interface GameBoardProps {
   config: GameConfig;
@@ -107,6 +108,39 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     };
   }, []);
 
+  // Size the game to the area the browser actually shows. Some phone browsers
+  // (Chrome on iPhone) don't resize the page when their address bar shrinks,
+  // which left an empty band under the rack.
+  const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const update = () => setViewport({
+      height: Math.round(vv ? vv.height : window.innerHeight),
+      top: Math.round(vv ? vv.offsetTop : 0),
+    });
+    update();
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
+  }, []);
+
+  // Fit the whole hand in one row: shrink rack tiles on narrow screens.
+  const [rackWidth, setRackWidth] = useState(0);
+  useEffect(() => {
+    const el = rackScrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => setRackWidth(entries[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Keep the newest discard in view.
   useEffect(() => {
     const el = discardPoolRef.current;
@@ -127,6 +161,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     : MOBILE_SIDE_COL;
 
   const humanPlayer = game.players[0];
+  // 14 slots so the size doesn't change between drawing and discarding.
+  const rackSlots = Math.max(14, humanPlayer.hand.length);
+  const rackTileScale = rackWidth > 0
+    ? Math.min(1, (rackWidth - RACK_GAP * (rackSlots - 1)) / (rackSlots * 56))
+    : 1;
   const tilesRemaining = game.wall.length;
   const tipsEnabled = config.tipsEnabled;
   const callWindowSeconds = DISCARD_CALL_WINDOW_SECONDS;
@@ -783,7 +822,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     // Pinned to the screen's edges rather than sized with 100dvh: on iPhone the
     // browser bars change the viewport height, and a page left scrolled from the
     // setup screen would otherwise show a gap under the game.
-    <div className="fixed inset-0 flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif" }}>
+    <div className="fixed inset-x-0 top-0 flex flex-col overflow-hidden select-none" style={{
+      background: '#1B2A4A', fontFamily: "'Jost', sans-serif",
+      height: viewport ? viewport.height : '100dvh',
+      transform: viewport && viewport.top ? `translateY(${viewport.top}px)` : undefined,
+    }}>
       {/* Top Bar */}
       <div className="relative flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
         <div className="flex items-center gap-2">
@@ -1460,8 +1503,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             </div>
           ) : (
             /* ─── Standard Single Rack ─── */
-            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT }}>
-              <div className="flex items-end gap-0.5 w-max mx-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT - 16 }}>
+            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: Math.round(76 * rackTileScale + 14 * Math.max(rackTileScale, 0.6)) + 16 }}>
+              <div className="flex items-end w-max mx-auto" style={{ gap: RACK_GAP, minHeight: Math.round(76 * rackTileScale + 14 * Math.max(rackTileScale, 0.6)) }}>
               {humanPlayer.hand.map((tile, index) => {
                 const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(tile.id);
                 const isAnalyzeHovered = analyzeHoverId === tile.id;
@@ -1487,6 +1530,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                       <TileComponent
                         tile={tile}
                         size="lg"
+                        scale={rackTileScale}
                         selected={isCharlestonSelected || game.selectedTileIndex === index}
                         selectedColor={isCharlestonSelected ? '#B5704F' : undefined}
                         interactive
