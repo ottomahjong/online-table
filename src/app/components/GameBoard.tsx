@@ -87,6 +87,24 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const [jokerExchangeMode, setJokerExchangeMode] = useState(false);
   const [jokerExchangeOptions, setJokerExchangeOptions] = useState<JokerExchangeOption[]>([]);
 
+  // The game owns the whole screen: reset the scroll left over from the setup
+  // page and stop the page behind it from scrolling or showing through.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    const html = document.documentElement, body = document.body;
+    const prev = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow, bodyBg: body.style.background, overscroll: html.style.overscrollBehavior };
+    html.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overflow = 'hidden';
+    body.style.background = '#1B2A4A';
+    return () => {
+      html.style.overflow = prev.htmlOverflow;
+      html.style.overscrollBehavior = prev.overscroll;
+      body.style.overflow = prev.bodyOverflow;
+      body.style.background = prev.bodyBg;
+    };
+  }, []);
+
   // Keep the newest discard in view.
   useEffect(() => {
     const el = discardPoolRef.current;
@@ -770,7 +788,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
   return (
     <DndProvider backend={HTML5Backend}>
-    <div className="flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif", height: '100dvh', minHeight: '100dvh' }}>
+    // Pinned to the screen's edges rather than sized with 100dvh: on iPhone the
+    // browser bars change the viewport height, and a page left scrolled from the
+    // setup screen would otherwise show a gap under the game.
+    <div className="fixed inset-0 flex flex-col overflow-hidden select-none" style={{ background: '#1B2A4A', fontFamily: "'Jost', sans-serif" }}>
       {/* Top Bar */}
       <div className="relative flex items-center justify-between px-3 py-1.5 shrink-0" style={{ background: 'rgba(0,0,0,0.25)' }}>
         <div className="flex items-center gap-2">
