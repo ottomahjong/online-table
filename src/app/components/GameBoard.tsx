@@ -1836,6 +1836,8 @@ Blank selected — tap a discard above to take it, or choose Discard Blank
         playerIndex={0}
         rack={activeRack}
         playerBarHeight={playerBarHeight}
+        planHands={planHands}
+        onAddPlan={handleAddPlan}
         onClose={() => { setShowAnalyze(false); setAnalyzeHoverId(null); }}
         onTileHover={setAnalyzeHoverId}
       />

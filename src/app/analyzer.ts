@@ -143,7 +143,32 @@ export interface CandidateHand {
   jokersUsable: number;
   reasoning: string;
   fading: boolean;
+  /** The plan as card-colored tokens (g/r/b = suit 1/2/3, n = no suit), e.g. "FFF:n 135:b 7777:b". */
+  colorPattern: string;
+  /** Which real suit each card color stands for in this plan. */
+  suitColors: { color: 'g' | 'r' | 'b'; suit: 'Bam' | 'Crak' | 'Dot' }[];
   plan: RankedPlan;
+}
+
+const DRAGON_SUIT: Record<string, 'Bam' | 'Crak' | 'Dot'> = { d_green: 'Bam', d_red: 'Crak', d_soap: 'Dot' };
+const SUIT_NAME: Record<string, 'Bam' | 'Crak' | 'Dot'> = { bam: 'Bam', crak: 'Crak', dot: 'Dot' };
+
+function suitColorsOf(plan: RankedPlan): CandidateHand['suitColors'] {
+  const out: CandidateHand['suitColors'] = [];
+  for (const color of ['g', 'r', 'b'] as const) {
+    let suit: 'Bam' | 'Crak' | 'Dot' | undefined;
+    for (const g of plan.progress.variant.groups) {
+      if (g.color !== color) continue;
+      for (const k of g.needs.keys()) {
+        if (k.startsWith('s_')) suit = SUIT_NAME[k.split('_')[1]];
+        else if (k !== 'd_soap' || /^D+$/.test(g.text)) suit = suit ?? DRAGON_SUIT[k]; // a 0 (White) is suitless
+        if (suit) break;
+      }
+      if (suit) break;
+    }
+    if (suit) out.push({ color, suit });
+  }
+  return out;
 }
 
 function pairFills(plan: RankedPlan) {
@@ -207,6 +232,8 @@ function buildCandidate(plan: RankedPlan, avail: Availability, racingKeys: Set<s
     jokersUsable: p.jokersUsed,
     reasoning: '',
     fading,
+    colorPattern: plan.progress.variant.groups.map(g => `${g.text}:${g.color}`).join(' '),
+    suitColors: suitColorsOf(plan),
     plan,
   };
   c.reasoning = composeReasoning(c);
