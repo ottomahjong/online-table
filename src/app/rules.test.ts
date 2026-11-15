@@ -7,9 +7,10 @@ import {
   checkSimpleWin, findWinningHandMatch, getCallOptions, resolveDiscardClaims,
   findValidJokerExchanges, executeJokerExchange, declareMahjong, buildWinInfo,
   executeCharlestonRound, executeCourtesyPass, createGame, drawTile, aiTurn,
+  blankTrade, discardTile, canClaimMahjongOnDiscard,
 } from './gameLogic';
-import { chooseDiscard, chooseCall } from './aiStrategy';
-import { assessCall } from './analyzer';
+import { chooseDiscard, chooseCall, chooseBlankTrade } from './aiStrategy';
+import { assessCall, analyze } from './analyzer';
 import { validateCard } from './cards/expand';
 import type { CardDefinition } from './cards/types';
 import type { GameState, Player, Tile, Suit } from './types';
@@ -21,6 +22,7 @@ const J = (): Tile => ({ type: 'special', specialType: 'joker', number: 0, id: u
 const F = (): Tile => ({ type: 'special', specialType: 'flower', number: 1, id: uid() });
 const D = (color: 'red' | 'green' | 'soap'): Tile => ({ type: 'dragon', color, id: uid() });
 const W = (direction: 'north' | 'east' | 'west' | 'south'): Tile => ({ type: 'wind', direction, id: uid() });
+const B = (): Tile => ({ type: 'special', specialType: 'blank', number: 1, id: uid() });
 const many = (n: number, make: () => Tile) => Array.from({ length: n }, make);
 
 function player(hand: Tile[], exposures: Tile[][] = [], extra: Partial<Player> = {}): Player {
@@ -336,5 +338,99 @@ describe('Call coaching', () => {
     const a = assessCall(g, 0, 3)!;
     expect(a.fits).toBe(false);
     expect(a.message).toMatch(/dead/);
+  });
+});
+
+// ─── Blanks ────────────────────────────────────────────────────────────
+
+describe('Blanks', () => {
+  const cfg = (blankCount: 0 | 2 | 4 | 6 | 8) => ({
+    playerCount: 4 as const, jokerCount: 8 as const, flowerCount: 8 as const, blankCount,
+    totalTiles: 152 + blankCount, botSkillLevel: 3 as const, tipsEnabled: false,
+  });
+  const countBlanks = (g: GameState) =>
+    [...g.wall, ...g.players.flatMap(p => p.hand)].filter(t => t.type === 'special' && t.specialType === 'blank').length;
+
+  /** Human to discard, holding a blank; pool holds an 8 Bam, a Joker and a blank. */
+  function blankTurn(): { g: GameState; eight: Tile; jokerInPool: Tile } {
+    const eight = s('bam', 8), jokerInPool = J();
+    const hand = [...evenBams().slice(0, 13), B()]; // 222 4444 666 888 + blank: one 8 Bam from Mahjong
+    const g = withPlayer(state({ discardPool: [s('dot', 1), eight, jokerInPool, B()] }), 0, { hand });
+    return { g, eight, jokerInPool };
+  }
+
+  it('are opt-in: none by default, the chosen number when added', () => {
+    expect(countBlanks(createGame(cfg(0)))).toBe(0);
+    const g = createGame(cfg(6));
+    expect(countBlanks(g)).toBe(6);
+    expect(g.wall.length + g.players.reduce((n, p) => n + p.hand.length, 0)).toBe(158);
+  });
+
+  it('trade for any natural discard on your turn; the blank takes its place in the pool', () => {
+    const { g, eight } = blankTurn();
+    const r = blankTrade(g, 13, 1);
+    expect(r.players[0].hand[13].id).toBe(eight.id);
+    expect(r.discardPool[1].type === 'special' && r.discardPool[1].specialType === 'blank').toBe(true);
+    expect(r.discardPool).toHaveLength(4);
+    expect(r.turnPhase).toBe('discarding');
+    // …and the tile it fetched can complete the hand.
+    expect(declareMahjong(r, 0).phase).toBe('gameOver');
+  });
+
+  it('cannot pick up a discarded Joker or another blank', () => {
+    const { g } = blankTurn();
+    expect(blankTrade(g, 13, 2).players).toBe(g.players);
+    expect(blankTrade(g, 13, 2).message).toMatch(/cannot pick up a discarded Joker/);
+    expect(blankTrade(g, 13, 3).players).toBe(g.players);
+  });
+
+  it('only on your own turn', () => {
+    const { g } = blankTurn();
+    const notMyTurn = { ...g, currentPlayerIndex: 1 };
+    expect(blankTrade(notMyTurn, 13, 1)).toBe(notMyTurn);
+    const calling = { ...g, turnPhase: 'calling' as const };
+    expect(blankTrade(calling, 13, 1)).toBe(calling);
+  });
+
+  it('may be discarded instead, and a discarded blank cannot be called', () => {
+    const { g } = blankTurn();
+    let r = discardTile(g, 13);
+    expect(r.lastDiscarded?.type === 'special' && r.lastDiscarded.specialType === 'blank').toBe(true);
+    r = withPlayer(r, 1, { hand: [B(), B(), J(), J(), ...many(9, () => s('dot', 3))] });
+    expect(getCallOptions(r, 1)).toEqual([]);
+    expect(canClaimMahjongOnDiscard(r, 1)).toBe(false);
+  });
+
+  it('are not Jokers: no Mahjong while holding one, and they cannot stand in when calling', () => {
+    const { g } = blankTurn();
+    expect(checkSimpleWin(g.players[0])).toBe(false);
+    expect(declareMahjong(g, 0).phase).toBe('playing');
+    // Two blanks + one natural cannot call a kong the way two jokers could.
+    const discard = s('crak', 5);
+    let c = state({ currentPlayerIndex: 1, turnPhase: 'calling', lastDiscarded: discard, lastDiscardedBy: 1, discardPool: [discard] });
+    c = withPlayer(c, 0, { hand: [s('crak', 5), B(), B(), ...many(10, () => s('dot', 1))] });
+    expect(getCallOptions(c, 0)).toEqual([]);
+  });
+
+  it('cannot be passed in the Charleston', () => {
+    const g = createGame(cfg(0));
+    const withBlank = { ...g.players[0], hand: [B(), ...g.players[0].hand.slice(1)] };
+    const players = [withBlank, ...g.players.slice(1)];
+    expect(executeCharlestonRound(players, [0, 1, 2], 'right', 4).players).toBe(players);
+    expect(executeCourtesyPass(players, [0], 4).exchanged).toBe(0);
+  });
+
+  it('bots trade a blank for the discard that helps most, and the trainer points to it', () => {
+    const { g, eight } = blankTurn();
+    const choice = chooseBlankTrade(g.players[0].hand, [], g.discardPool)!;
+    expect(g.discardPool[choice.poolIndex].id).toBe(eight.id);
+    const advice = analyze(g, 0).tileAdvice.find(a => a.tile.type === 'special' && a.tile.specialType === 'blank')!;
+    expect(advice.action).toBe('KEEP');
+    expect(advice.reason).toMatch(/8 Bam/);
+    // A bot in the same spot trades and wins.
+    const bot = { ...g, players: g.players.map((p, i) => (i === 0 ? { ...p, isHuman: false } : p)) };
+    const after = aiTurn(bot);
+    expect(after.phase).toBe('gameOver');
+    expect(after.winner).toBe(0);
   });
 });

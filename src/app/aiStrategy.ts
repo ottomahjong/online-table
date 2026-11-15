@@ -8,7 +8,7 @@
 
 import type { Tile } from './types';
 import {
-  removalCosts, rankPlans, isJoker, tileKey, type Availability,
+  removalCosts, rankPlans, isJoker, isBlank, tileKey, type Availability,
 } from './handMatcher';
 
 const TOP_K = [3, 6, 10, 14, 18];
@@ -69,7 +69,8 @@ export function chooseDiscard(
     const k = keyOf(t);
     if (k === 'joker' && hasNatural) return;
     const after = byKey.get(k) ?? baseline;
-    const score = after + (usage.get(k) || 0) * 0.002 + NOISE[s] * rng();
+    // A blank can still become any discard later: let truly dead tiles go first.
+    const score = after + (k === 'blank' ? 0.3 : 0) + (usage.get(k) || 0) * 0.002 + NOISE[s] * rng();
     if (score < bestScore) { bestScore = score; best = i; bestDelta = after - baseline; }
   });
   return best < 0 ? null : { index: best, delta: bestDelta };
@@ -135,7 +136,7 @@ export function chooseCharlestonPass(
     const { byKey, baseline } = removalCosts(tiles, [], avail, Math.max(8, TOP_K[s]));
     let best = -1, bestScore = Infinity;
     remaining.forEach((x, idx) => {
-      if (isJoker(x.t)) return;
+      if (isJoker(x.t) || isBlank(x.t)) return; // neither may be passed
       const score = (byKey.get(keyOf(x.t)) ?? baseline) + NOISE[s] * rng();
       if (score < bestScore) { bestScore = score; best = idx; }
     });
@@ -151,8 +152,41 @@ export function chooseCourtesyCount(hand: Tile[], avail: Availability | undefine
   const { byKey, baseline } = removalCosts(hand, [], avail, Math.max(8, TOP_K[si(skill)]));
   let dead = 0;
   for (const t of hand) {
-    if (isJoker(t)) continue;
+    if (isJoker(t) || isBlank(t)) continue;
     if ((byKey.get(keyOf(t)) ?? baseline) - baseline < 0.05) dead++;
   }
   return Math.min(3, dead);
+}
+
+export interface BlankTradeChoice {
+  handIndex: number;   // the blank in hand
+  poolIndex: number;   // the discard to take
+  gain: number;        // how many tiles closer the best hand gets
+}
+
+/**
+ * The best trade of a blank for a tile in the discard pool, or null if no
+ * discard brings the best hand at least most of a tile closer. Jokers and
+ * blanks in the pool can't be taken.
+ */
+export function chooseBlankTrade(
+  hand: Tile[], exposures: Tile[][], pool: Tile[], avail?: Availability,
+): BlankTradeChoice | null {
+  const handIndex = hand.findIndex(isBlank);
+  if (handIndex < 0 || pool.length === 0) return null;
+  const before = bestPlanCost(hand, exposures, avail);
+  const tried = new Set<string>();
+  let best: BlankTradeChoice | null = null;
+  pool.forEach((tile, poolIndex) => {
+    if (isJoker(tile) || isBlank(tile)) return;
+    const k = tileKey(tile);
+    if (tried.has(k)) return;
+    tried.add(k);
+    const swapped = hand.map((t, i) => (i === handIndex ? tile : t));
+    const after = bestPlanCost(swapped, exposures, avail);
+    if (after === Infinity) return;
+    const gain = before === Infinity ? 1 : before - after;
+    if (gain >= 0.6 && (!best || gain > best.gain)) best = { handIndex, poolIndex, gain };
+  });
+  return best;
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
-import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahjong, canClaimMahjongOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
+import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, canTakeWithBlank, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahjong, canClaimMahjongOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
 import { TileComponent, TileBack } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
@@ -306,7 +306,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     // === CALLING PHASE ===
     if (game.turnPhase === 'calling') {
       if (pendingActionRef.current?.kind !== 'call-window') {
-        schedulePendingAction('call-window', callWindowSeconds * 1000);
+        const dead = !!game.lastDiscarded && !canTakeWithBlank(game.lastDiscarded);
+        schedulePendingAction('call-window', dead ? 1500 : callWindowSeconds * 1000);
       }
       return;
     }
@@ -363,6 +364,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         setGame(prev => ({ ...prev, message: 'Jokers cannot be passed during Charleston' }));
         return;
       }
+      if (tile && tile.type === 'special' && tile.specialType === 'blank') {
+        setGame(prev => ({ ...prev, message: 'Blanks cannot be passed during Charleston' }));
+        return;
+      }
       const maxSelect = charlestonSubPhase === 'courtesy' ? 3 : 3;
       setCharlestonSelected(prev => {
         if (prev.includes(index)) {
@@ -381,15 +386,18 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         return;
       }
       const tile = activeHand[index];
-      if (tile && tile.type === 'special' && tile.specialType === 'blank') {
-        if (game.discardPool.length > 0) {
-          setBlankTradeMode({ blankIndex: index });
-          setGame(prev => ({ ...prev, message: 'Blank Trade — select a tile from the discards to swap', selectedTileIndex: index }));
-          return;
-        } else {
-          setGame(prev => ({ ...prev, message: 'No discarded tiles available to trade.' }));
-          return;
-        }
+      // A blank on your turn: choose between taking a discard and discarding the blank.
+      if (tile && tile.type === 'special' && tile.specialType === 'blank'
+        && game.currentPlayerIndex === 0 && game.turnPhase === 'discarding') {
+        setBlankTradeMode({ blankIndex: index });
+        setGame(prev => ({
+          ...prev,
+          selectedTileIndex: index,
+          message: prev.discardPool.some(canTakeWithBlank)
+            ? 'Blank — tap any discard to take it, or discard the blank'
+            : 'Blank — nothing in the discards to take yet; you can discard it or keep it',
+        }));
+        return;
       }
     }
 
@@ -406,7 +414,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         return { ...prev, selectedTileIndex: index };
       }
     });
-  }, [isPaused, game.phase, game.discardPool.length, charlestonSubPhase, blankTradeMode, jokerExchangeMode, humanPlayer.hand, siamese]);
+  }, [isPaused, game.phase, game.currentPlayerIndex, game.turnPhase, charlestonSubPhase, blankTradeMode, jokerExchangeMode, humanPlayer, activeRack, siamese]);
 
   // Handle selecting a discard tile during blank trade
   const handleBlankTradeSelect = useCallback((discardIndex: number) => {
@@ -414,6 +422,14 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     if (!blankTradeMode) return;
     setGame(prev => blankTrade(prev, blankTradeMode.blankIndex, discardIndex, siamese ? prev.activeRack : undefined));
     setBlankTradeMode(null);
+  }, [isPaused, blankTradeMode, siamese]);
+
+  // Discard the selected blank instead of trading it
+  const handleDiscardBlank = useCallback(() => {
+    if (isPaused || !blankTradeMode) return;
+    const index = blankTradeMode.blankIndex;
+    setBlankTradeMode(null);
+    setGame(prev => discardTile(prev, index, siamese ? prev.activeRack : undefined));
   }, [isPaused, blankTradeMode, siamese]);
 
   // Handle joker exchange button
@@ -926,18 +942,29 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
                   {/* Blank Trade / Joker Exchange mode banner */}
                   {(blankTradeMode || jokerExchangeMode) && (
-                    <div className="flex items-center gap-2 px-4 py-2 rounded-lg" style={{
+                    <div className="flex flex-wrap items-center justify-center gap-2 px-4 py-2 rounded-lg" style={{
                       background: 'rgba(181,112,79,0.25)',
                       border: '1px solid rgba(181,112,79,0.5)',
                       boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
                     }}>
                       <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#B5704F' }} />
                       <span style={{ color: '#FFFDF7', fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.05em' }}>
-                        {blankTradeMode ? 'BLANK TRADE — Click a discard tile to swap' : 'JOKER EXCHANGE — Click a Joker in any exposed set'}
+                        {blankTradeMode
+                          ? (game.discardPool.some(canTakeWithBlank) ? 'BLANK — Tap a discard to take it' : 'BLANK — No discards to take yet')
+                          : 'JOKER EXCHANGE — Click a Joker in any exposed set'}
                       </span>
+                      {blankTradeMode && (
+                        <button
+                          onClick={handleDiscardBlank}
+                          className="px-2.5 py-1 rounded text-[0.6rem] uppercase tracking-wider whitespace-nowrap hover:brightness-110 transition-all"
+                          style={{ background: '#FFFDF7', color: '#1B2A4A', fontWeight: 600 }}
+                        >
+                          Discard Blank
+                        </button>
+                      )}
                       <button
-                        onClick={() => { setBlankTradeMode(null); setJokerExchangeMode(false); setJokerExchangeOptions([]); }}
-                        className="ml-2 px-2 py-0.5 rounded text-[0.55rem] uppercase tracking-wider hover:bg-white/10 transition-colors"
+                        onClick={() => { setBlankTradeMode(null); setJokerExchangeMode(false); setJokerExchangeOptions([]); setGame(prev => ({ ...prev, selectedTileIndex: null })); }}
+                        className="px-2.5 py-1 rounded text-[0.6rem] uppercase tracking-wider whitespace-nowrap hover:bg-white/10 transition-colors"
                         style={{ color: '#FFFDF7', border: '1px solid rgba(255,253,247,0.3)' }}
                       >
                         Cancel
@@ -967,8 +994,10 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         game.discardPool.map((tile, di) => (
                           <div
                             key={tile.id}
-                            className={blankTradeMode ? 'cursor-pointer rounded-sm transition-all hover:ring-2 hover:ring-[#B5704F] hover:scale-110' : ''}
-                            onClick={blankTradeMode ? () => handleBlankTradeSelect(di) : undefined}
+                            className={blankTradeMode && canTakeWithBlank(tile) ? 'cursor-pointer rounded-sm transition-all hover:ring-2 hover:ring-[#B5704F] hover:scale-110' : ''}
+                            style={blankTradeMode && !canTakeWithBlank(tile) ? { opacity: 0.35 } : undefined}
+                            title={blankTradeMode && !canTakeWithBlank(tile) ? 'A blank cannot take a Joker or another blank' : undefined}
+                            onClick={blankTradeMode && canTakeWithBlank(tile) ? () => handleBlankTradeSelect(di) : undefined}
                           >
                             <TileComponent tile={tile} size="sm" />
                           </div>
@@ -1486,7 +1515,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
               letterSpacing: '0.05em',
               fontWeight: 600,
             }}>
-              Blank Trade active — click a tile in the discard pool above to swap
+Blank selected — tap a discard above to take it, or choose Discard Blank
             </div>
           )}
           {jokerExchangeMode && (
@@ -1718,7 +1747,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 <p className="mb-1 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Gameplay</p>
                 <p>Players draw and discard in turn. Click a tile once to select, click again to discard.</p>
                 <p><strong style={{ color: '#1B2A4A' }}>Reorder:</strong> Click and drag any tile in your hand to rearrange your rack.</p>
-                <p><strong style={{ color: '#1B2A4A' }}>Blank Tiles:</strong> Click a blank in your hand to trade it for any tile in the discard pool.</p>
+                <p><strong style={{ color: '#1B2A4A' }}>Blank Tiles</strong> (if added in settings): on your turn, tap a blank, then either tap any discard to take it or choose Discard Blank. A blank is never a Joker, cannot take a discarded Joker, cannot be passed in the Charleston, cannot be called once discarded, and you cannot declare Mahjong while holding one.</p>
               </div>
 
               <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>

@@ -6,10 +6,10 @@ import { ACTIVE_CARD, CARD_MAX_GROUP_SIZE, type CardPattern, type CardSection } 
 import { parseTokenStr } from './cards/expand';
 import {
   ALL_PATTERNS, tileKey, isJoker, isJokerEligibleToken, suitDragon, SUIT_PERMS,
-  findBestWin, computeAvailability, type WinMatch,
+  findBestWin, computeAvailability, isBlank, type WinMatch,
 } from './handMatcher';
 import {
-  chooseDiscard, chooseCall, chooseCharlestonPass, chooseCourtesyCount, bestPlanCost,
+  chooseDiscard, chooseCall, chooseCharlestonPass, chooseCourtesyCount, bestPlanCost, chooseBlankTrade,
 } from './aiStrategy';
 
 // ─── Tile Generation ────────────────────────────────────────────────
@@ -59,7 +59,8 @@ function generateTileSet(config: GameConfig): Tile[] {
   }
 
   // Blanks to fill remaining slots
-  const blanksNeeded = Math.max(0, config.totalTiles - 136 - config.jokerCount - config.flowerCount);
+  // Blanks are opt-in. (Older configs implied them from a 160-tile set.)
+  const blanksNeeded = config.blankCount ?? Math.max(0, config.totalTiles - 136 - config.jokerCount - config.flowerCount);
   for (let i = 0; i < blanksNeeded; i++) {
     tiles.push({ type: 'special', specialType: 'blank', number: i + 1, id: nextId() });
   }
@@ -431,7 +432,7 @@ function getDiscardMahjongRack(state: GameState, playerIndex: number): 1 | 2 | n
   if (state.lastDiscardedBy === null || state.lastDiscardedBy === playerIndex) return null;
 
   const discard = state.lastDiscarded;
-  if (discard.type === 'special' && discard.specialType === 'joker') return null;
+  if (isJoker(discard) || isBlank(discard)) return null;
 
   const player = state.players[playerIndex];
   if (isSiameseMode(state)) {
@@ -471,7 +472,8 @@ export function getCallOptions(state: GameState, playerIndex: number): CallOptio
   const player = state.players[playerIndex];
   const discard = state.lastDiscarded;
 
-  if (discard.type === 'special' && discard.specialType === 'joker') {
+  // Discarded jokers and blanks are dead: nobody may call them.
+  if (isJoker(discard) || isBlank(discard)) {
     return [];
   }
 
@@ -933,6 +935,7 @@ export function aiTurn(state: GameState): GameState {
   }
 
   let current = aiExchangeJokers(state, state.currentPlayerIndex);
+  current = aiTradeBlanks(current, current.currentPlayerIndex);
   if (current !== state && checkSimpleWin(current.players[current.currentPlayerIndex])) {
     const won = declareMahjong(current, current.currentPlayerIndex);
     if (won.phase === 'gameOver') return won;
@@ -1043,45 +1046,72 @@ export function resolveDiscardClaims(state: GameState, humanClaim: HumanClaim = 
 
 // ─── Blank Tile Trade ───────────────────────────────────────────────
 
-/**
- * Trade a blank tile from a player's hand with a tile from the discard pool.
- * The blank goes into the discard pool at the same position.
- */
-export function blankTrade(state: GameState, blankHandIndex: number, discardPoolIndex: number, rack?: 1 | 2): GameState {
-  if (state.phase !== 'playing') return state;
+/** Can this discarded tile be taken with a blank? Any natural tile — never a joker or another blank. */
+export function canTakeWithBlank(tile: Tile): boolean {
+  return !isJoker(tile) && !isBlank(tile);
+}
 
-  const player = state.players[0]; // Human player only
+/**
+ * Trade a blank from a player's hand for a tile in the discard pool. Only on
+ * that player's own turn (after drawing or calling). The blank takes the
+ * tile's place in the pool. Jokers and blanks in the pool cannot be taken.
+ */
+export function blankTrade(
+  state: GameState, blankHandIndex: number, discardPoolIndex: number, rack?: 1 | 2, playerIndex = 0,
+): GameState {
+  if (state.phase !== 'playing') return state;
+  if (state.currentPlayerIndex !== playerIndex || state.turnPhase !== 'discarding') return state;
+
+  const player = state.players[playerIndex];
   const siamese = isSiameseMode(state);
   const effectiveRack = siamese ? (rack ?? state.activeRack) : 1;
+  if (siamese && isRackLocked(player, effectiveRack)) return state;
   const hand = effectiveRack === 2 ? player.hand2 : player.hand;
   const blankTile = hand[blankHandIndex];
+  if (!blankTile || !isBlank(blankTile)) return state;
 
-  // Validate it's actually a blank
-  if (!blankTile || blankTile.type !== 'special' || blankTile.specialType !== 'blank') return state;
-
-  // Validate discard pool index
   if (discardPoolIndex < 0 || discardPoolIndex >= state.discardPool.length) return state;
-
   const selectedTile = state.discardPool[discardPoolIndex];
+  if (!canTakeWithBlank(selectedTile)) {
+    return player.isHuman
+      ? { ...state, message: isJoker(selectedTile) ? 'A blank cannot pick up a discarded Joker.' : 'A blank cannot be traded for another blank.' }
+      : state;
+  }
 
-  // Swap: blank goes to discard pool, selected tile goes to hand
   const newHand = [...hand];
   newHand[blankHandIndex] = selectedTile;
-
   const newDiscardPool = [...state.discardPool];
   newDiscardPool[discardPoolIndex] = blankTile;
 
   const handField = effectiveRack === 2 ? 'hand2' : 'hand';
   const newPlayers = state.players.map((p, i) =>
-    i === 0 ? { ...p, [handField]: newHand } : p
+    i === playerIndex ? { ...p, [handField]: newHand } : p
   );
 
   return {
     ...state,
     players: newPlayers,
     discardPool: newDiscardPool,
-    message: `Traded blank for ${getTileName(selectedTile)}`,
+    selectedTileIndex: null,
+    lastActionWasJokerExchange: false,
+    message: player.isHuman
+      ? `Traded your blank for ${getTileName(selectedTile)}. Now discard a tile.`
+      : `${player.name} traded a blank for ${getTileName(selectedTile)}.`,
   };
+}
+
+/** Bots: trade blanks for discards that bring their best hand closer. */
+function aiTradeBlanks(state: GameState, playerIndex: number): GameState {
+  let current = state;
+  for (let guard = 0; guard < 8; guard++) {
+    const p = current.players[playerIndex];
+    const choice = chooseBlankTrade(p.hand, p.exposures, current.discardPool, computeAvailability(current, playerIndex));
+    if (!choice) break;
+    const next = blankTrade(current, choice.handIndex, choice.poolIndex, undefined, playerIndex);
+    if (next === current) break;
+    current = next;
+  }
+  return current;
 }
 
 // ─── Joker Exchange ─────────────────────────────────────────────────
@@ -1303,7 +1333,7 @@ export function executeCharlestonRound(
 ): CharlestonRoundResult {
   const human = players[0];
   const unchanged: CharlestonRoundResult = { players, wall, humanReceived: [], blindForwarded: 0 };
-  if (humanIndices.some(i => !human.hand[i] || isJoker(human.hand[i]))) return unchanged;
+  if (humanIndices.some(i => !human.hand[i] || isJoker(human.hand[i]) || isBlank(human.hand[i]))) return unchanged;
   if (humanIndices.length > 3) return unchanged;
   if (humanIndices.length < 3 && !(opts.blindAllowed && playerCount >= 3)) return unchanged;
 
@@ -1367,7 +1397,7 @@ export function executeCourtesyPass(
   skill = 3,
 ): CourtesyResult {
   const partner = getPassTarget(0, 'across', playerCount);
-  if (humanIndices.some(i => !players[0].hand[i] || isJoker(players[0].hand[i])) || humanIndices.length > 3) {
+  if (humanIndices.some(i => !players[0].hand[i] || isJoker(players[0].hand[i]) || isBlank(players[0].hand[i])) || humanIndices.length > 3) {
     return { players, wall, exchanged: 0, partnerIndex: partner };
   }
   if (partner < 0) {

@@ -48,7 +48,10 @@ export interface GameConfig {
   playerCount: 1 | 2 | 3 | 4;
   jokerCount: 8 | 10 | 12;
   flowerCount: 8 | 10 | 12;
-  totalTiles: 152 | 160;
+  /** Total tiles in play: 136 + jokers + flowers + blanks. */
+  totalTiles: number;
+  /** Optional blank tiles (0 = play without blanks). */
+  blankCount?: 0 | 2 | 4 | 6 | 8;
   botSkillLevel: 1 | 2 | 3 | 4 | 5;
   tipsEnabled: boolean;
 }
