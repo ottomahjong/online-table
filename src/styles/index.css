@@ -35,3 +35,9 @@ body {
     }
   }
 }
+
+/* Finish Turn / Next Turn pops in from below */
+@keyframes turn-btn-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
