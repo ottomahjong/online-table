@@ -6,6 +6,7 @@ import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
 import { AnalyzePanel } from './AnalyzePanel';
+import { TileKey } from './TileKey';
 import { assessCall } from '../analyzer';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -1673,7 +1674,7 @@ Blank selected — tap a discard above to take it, or choose Discard Blank
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(27,42,74,0.75)' }}
           onClick={() => setShowHelp(false)}>
-          <div className="rounded-lg p-6 max-w-md w-full"
+          <div className="rounded-lg p-4 sm:p-6 max-w-md w-full"
             style={{ background: '#FFFDF7', maxHeight: '80vh', overflow: 'auto' }}
             onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
@@ -1683,15 +1684,20 @@ Blank selected — tap a discard above to take it, or choose Discard Blank
                 fontSize: '1.1rem',
                 fontWeight: 600,
               }}>
-                How to Play
+                Tile Key &amp; How to Play
               </h3>
               <button onClick={() => setShowHelp(false)}
                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#F5F0E6]"
                 style={{ color: '#6B5E4F', fontSize: '1.2rem' }}>&times;</button>
             </div>
             <div className="space-y-3" style={{ color: '#6B5E4F', fontSize: '0.75rem', lineHeight: 1.6 }}>
-              {/* Terminology */}
+              {/* Tile Key */}
               <div>
+                <p className="mb-1.5 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Tile Key</p>
+                <TileKey showBlanks={(config.blankCount ?? 0) > 0} />
+              </div>
+              {/* Terminology */}
+              <div style={{ borderTop: '1px solid rgba(27,42,74,0.08)', paddingTop: '0.5rem' }}>
                 <p className="mb-1.5 uppercase tracking-[0.1em]" style={{ color: '#B5704F', fontWeight: 700, fontSize: '0.6rem' }}>Terminology</p>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5" style={{ fontSize: '0.7rem' }}>
                   <span><strong style={{ color: '#1B2A4A' }}>Run</strong> — consecutive numbers</span>

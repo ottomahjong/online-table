@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { GameConfig } from '../types';
 import { TileComponent, TileBack } from './Tile';
+import { TileKey } from './TileKey';
 import type { Tile as TileType } from '../types';
 
 interface SetupScreenProps {
@@ -246,6 +247,19 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
               Start Game
             </button>
           </div>
+        </div>
+
+        {/* Tile Key */}
+        <div className="w-full mt-8 p-3 sm:p-6 rounded-lg" style={{ background: '#FFFDF7', border: '1px solid rgba(27, 42, 74, 0.1)' }}>
+          <h3 className="mb-3 tracking-[0.1em] uppercase" style={{
+            fontFamily: "'Jost', sans-serif",
+            color: '#1B2A4A',
+            fontSize: '1rem',
+            fontWeight: 600,
+          }}>
+            Tile Key
+          </h3>
+          <TileKey showBlanks={blankCount > 0} />
         </div>
 
         {/* Instructions */}
