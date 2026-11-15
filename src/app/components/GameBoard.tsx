@@ -77,7 +77,11 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   // Charleston state
   const [charlestonSubPhase, setCharlestonSubPhase] = useState<'pre' | 'selecting' | 'passed' | 'optOut' | 'courtesy' | 'done'>('pre');
   const [charlestonStep, setCharlestonStep] = useState(0);
-  const [charlestonSelected, setCharlestonSelected] = useState<number[]>([]);
+  // Charleston selection, by tile id, so sorting or dragging the rack can't move it onto other tiles.
+  const [charlestonSelected, setCharlestonSelected] = useState<string[]>([]);
+  /** The selected tiles' current rack positions, for the pass functions. */
+  const selectedRackIndices = (hand: TileType[]) =>
+    charlestonSelected.map(id => hand.findIndex(t => t.id === id)).filter(i => i >= 0);
   const [charlestonReceivedCount, setCharlestonReceivedCount] = useState(0);
 
   // Blank trade & joker exchange modes
@@ -375,24 +379,23 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
     // Charleston tile selection (including courtesy pass)
     if (game.phase === 'charleston' && (charlestonSubPhase === 'selecting' || charlestonSubPhase === 'courtesy')) {
-      // Jokers may NEVER be passed during Charleston
       const tile = humanPlayer.hand[index];
-      if (tile && tile.type === 'special' && tile.specialType === 'joker') {
+      if (!tile) return;
+      // A selected tile can always be deselected.
+      if (charlestonSelected.includes(tile.id)) {
+        setCharlestonSelected(prev => prev.filter(id => id !== tile.id));
+        return;
+      }
+      // Jokers may NEVER be passed during Charleston
+      if (tile.type === 'special' && tile.specialType === 'joker') {
         setGame(prev => ({ ...prev, message: 'Jokers cannot be passed during Charleston' }));
         return;
       }
-      if (tile && tile.type === 'special' && tile.specialType === 'blank') {
+      if (tile.type === 'special' && tile.specialType === 'blank') {
         setGame(prev => ({ ...prev, message: 'Blanks cannot be passed during Charleston' }));
         return;
       }
-      const maxSelect = charlestonSubPhase === 'courtesy' ? 3 : 3;
-      setCharlestonSelected(prev => {
-        if (prev.includes(index)) {
-          return prev.filter(i => i !== index);
-        }
-        if (prev.length >= 3) return prev;
-        return [...prev, index];
-      });
+      setCharlestonSelected(prev => (prev.length >= 3 || prev.includes(tile.id) ? prev : [...prev, tile.id]));
       return;
     }
 
@@ -431,7 +434,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
         return { ...prev, selectedTileIndex: index };
       }
     });
-  }, [isPaused, game.phase, game.currentPlayerIndex, game.turnPhase, charlestonSubPhase, blankTradeMode, jokerExchangeMode, humanPlayer, activeRack, siamese]);
+  }, [isPaused, game.phase, game.currentPlayerIndex, game.turnPhase, charlestonSubPhase, charlestonSelected, blankTradeMode, jokerExchangeMode, humanPlayer, activeRack, siamese]);
 
   // Handle selecting a discard tile during blank trade
   const handleBlankTradeSelect = useCallback((discardIndex: number) => {
@@ -548,16 +551,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       }
       return { ...prev, players: newPlayers, selectedTileIndex: newSelectedIndex };
     });
-    // Also update charleston selection indices if reordering during charleston
-    if (charlestonSelected.length > 0) {
-      setCharlestonSelected(prev => prev.map(idx => {
-        if (idx === fromIndex) return toIndex;
-        if (fromIndex < idx && toIndex >= idx) return idx - 1;
-        if (fromIndex > idx && toIndex <= idx) return idx + 1;
-        return idx;
-      }));
-    }
-  }, [charlestonSelected.length]);
+  }, []);
 
   const handleNewGame = useCallback(() => {
     clearPendingAction();
@@ -700,7 +694,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
 
     // Everyone passes at once; you receive from the player on the other side.
     const result = executeCharlestonRound(
-      game.players, charlestonSelected, stepInfo.direction, config.playerCount, game.wall,
+      game.players, selectedRackIndices(game.players[0].hand), stepInfo.direction, config.playerCount, game.wall,
       { blindAllowed, skill: config.botSkillLevel },
     );
     if (result.players === game.players) return;
@@ -742,7 +736,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
       return;
     }
     // Each side names 0–3 tiles; the pair trades the smaller number.
-    const result = executeCourtesyPass(game.players, charlestonSelected, config.playerCount, game.wall, config.botSkillLevel);
+    const result = executeCourtesyPass(game.players, selectedRackIndices(game.players[0].hand), config.playerCount, game.wall, config.botSkillLevel);
     const partnerName = result.partnerIndex >= 0 ? game.players[result.partnerIndex].name : 'the pile';
     const offered = charlestonSelected.length;
     setGame({
@@ -1469,7 +1463,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT }}>
               <div className="flex items-end gap-0.5 w-max mx-auto" style={{ minHeight: RACK_ROW_MIN_HEIGHT - 16 }}>
               {humanPlayer.hand.map((tile, index) => {
-                const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(index);
+                const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(tile.id);
                 const isAnalyzeHovered = analyzeHoverId === tile.id;
                 return (
                   <div
@@ -1501,7 +1495,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center z-10"
                           style={{ background: '#B5704F', border: '2px solid #FFFDF7', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
                           <span style={{ color: '#FFFDF7', fontSize: '0.5rem', fontWeight: 700 }}>
-                            {charlestonSelected.indexOf(index) + 1}
+                            {charlestonSelected.indexOf(tile.id) + 1}
                           </span>
                         </div>
                       )}
@@ -1888,7 +1882,7 @@ function CharlestonUI({
   stepInGroup: number;
   isFirstCharleston: boolean;
   charlestonStep: number;
-  charlestonSelected: number[];
+  charlestonSelected: string[];
   onStart: () => void;
   onSkip: () => void;
   onPass: () => void;
