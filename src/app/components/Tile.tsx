@@ -79,6 +79,10 @@ interface TileProps {
   interactive?: boolean;
   horizontal?: boolean;
   className?: string;
+  /** Shrink the tile uniformly (e.g. to fit a whole hand on a phone). 1 = actual size. */
+  scale?: number;
+  /** Internal: the scaled wrapper handles the selected lift. */
+  liftless?: boolean;
 }
 
 const sizeMap = {
@@ -411,7 +415,26 @@ export function TileComponent({
   interactive = false,
   horizontal = false,
   className = '',
+  scale = 1,
+  liftless = false,
 }: TileProps) {
+  if (scale !== 1) {
+    // Lay out at the scaled size; draw the full-size tile scaled down so the face stays crisp.
+    const d = sizeMap[size];
+    const w0 = horizontal ? d.h : d.w, h0 = horizontal ? d.w : d.h;
+    return (
+      <div style={{
+        width: w0 * scale, height: h0 * scale, minWidth: w0 * scale,
+        marginBottom: selected ? Math.round(14 * Math.max(scale, 0.6)) : 0,
+        transition: 'margin-bottom 0.1s ease-out',
+      }}>
+        <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: w0, height: h0 }}>
+          <TileComponent tile={tile} faceDown={faceDown} size={size} selected={selected} selectedColor={selectedColor}
+            onClick={onClick} interactive={interactive} horizontal={horizontal} className={className} liftless />
+        </div>
+      </div>
+    );
+  }
   const isInteractive = !!onClick || interactive;
   const ringColor = selectedColor || '#2D6A4F';
   const dims = sizeMap[size];
@@ -457,7 +480,7 @@ export function TileComponent({
         boxShadow: selected
           ? `0 0 0 2.5px ${ringColor}, 0 6px 16px rgba(0,0,0,0.25)`
           : undefined,
-        marginBottom: selected ? 14 : 0,
+        marginBottom: selected && !liftless ? 14 : 0,
         transition: 'margin-bottom 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out',
       }}
     >
