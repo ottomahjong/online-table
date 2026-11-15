@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { GameConfig } from '../types';
 import { TileComponent, TileBack } from './Tile';
+import { TileKey } from './TileKey';
 import type { Tile as TileType } from '../types';
 
 interface SetupScreenProps {
@@ -21,22 +22,16 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
   const [playerCount, setPlayerCount] = useState<1 | 2 | 3 | 4>(4);
   const [jokerCount, setJokerCount] = useState<8 | 10 | 12>(8);
   const [flowerCount, setFlowerCount] = useState<8 | 10 | 12>(8);
-  const [totalTiles, setTotalTiles] = useState<152 | 160>(152);
+  const [blankCount, setBlankCount] = useState<0 | 2 | 4 | 6 | 8>(0);
   const [botSkillLevel, setBotSkillLevel] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [tipsEnabled, setTipsEnabled] = useState(false);
 
-  const blanksNeeded = useMemo(() => {
-    const base = 136;
-    return Math.max(0, totalTiles - base - jokerCount - flowerCount);
-  }, [totalTiles, jokerCount, flowerCount]);
-
-  const isValid = useMemo(() => {
-    return (136 + jokerCount + flowerCount) <= totalTiles;
-  }, [totalTiles, jokerCount, flowerCount]);
+  const totalTiles = useMemo(() => 136 + jokerCount + flowerCount + blankCount, [jokerCount, flowerCount, blankCount]);
+  const isValid = true;
 
   const handleStart = () => {
     if (!isValid) return;
-    onStartGame({ playerCount, jokerCount, flowerCount, totalTiles, botSkillLevel, tipsEnabled });
+    onStartGame({ playerCount, jokerCount, flowerCount, blankCount, totalTiles, botSkillLevel, tipsEnabled });
   };
 
   const modeSummary = {
@@ -108,16 +103,6 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
             </p>
           </SettingRow>
 
-          {/* Total Tiles */}
-          <SettingRow label="Tile Set">
-            <OptionGroup
-              options={[152, 160]}
-              value={totalTiles}
-              onChange={(v) => setTotalTiles(v as 152 | 160)}
-              labels={['152 Tiles', '160 Tiles']}
-            />
-          </SettingRow>
-
           {/* Joker Count */}
           <SettingRow label="Jokers">
             <OptionGroup
@@ -136,6 +121,21 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
               onChange={(v) => setFlowerCount(v as 8 | 10 | 12)}
               labels={['8 Flowers', '10 Flowers', '12 Flowers']}
             />
+          </SettingRow>
+
+          {/* Blanks */}
+          <SettingRow label="Blanks">
+            <OptionGroup
+              options={[0, 2, 4, 6, 8]}
+              value={blankCount}
+              onChange={(v) => setBlankCount(v as 0 | 2 | 4 | 6 | 8)}
+              labels={['None', '2 Blanks', '4 Blanks', '6 Blanks', '8 Blanks']}
+            />
+            <p className="mt-1.5" style={{ color: '#8B9D83', fontSize: '0.7rem', lineHeight: 1.4 }}>
+              {blankCount === 0
+                ? 'Play without blanks, or add some for an extra twist.'
+                : 'On your turn, trade a blank for any tile in the discards — or discard the blank. A blank is never a Joker, cannot pick up a discarded Joker, cannot be passed in the Charleston, and cannot be called once discarded. You cannot declare Mahjong while holding one.'}
+            </p>
           </SettingRow>
 
           {/* Bot Skill Level */}
@@ -213,11 +213,11 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
                 Flowers: <strong style={{ color: '#1B2A4A' }}>{flowerCount}</strong>
               </span>
               <span style={{ color: '#6B5E4F' }}>
-                Blanks: <strong style={{ color: '#1B2A4A' }}>{blanksNeeded}</strong>
+                Blanks: <strong style={{ color: '#1B2A4A' }}>{blankCount}</strong>
               </span>
               <span style={{ color: '#6B5E4F' }}>
                 Total: <strong style={{ color: isValid ? '#2D6A4F' : '#C4453E' }}>
-                  {136 + jokerCount + flowerCount + blanksNeeded} / {totalTiles}
+                  {totalTiles}
                 </strong>
               </span>
             </div>
@@ -247,6 +247,19 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
               Start Game
             </button>
           </div>
+        </div>
+
+        {/* Tile Key */}
+        <div className="w-full mt-8 p-3 sm:p-6 rounded-lg" style={{ background: '#FFFDF7', border: '1px solid rgba(27, 42, 74, 0.1)' }}>
+          <h3 className="mb-3 tracking-[0.1em] uppercase" style={{
+            fontFamily: "'Jost', sans-serif",
+            color: '#1B2A4A',
+            fontSize: '1rem',
+            fontWeight: 600,
+          }}>
+            Tile Key
+          </h3>
+          <TileKey showBlanks={blankCount > 0} />
         </div>
 
         {/* Instructions */}

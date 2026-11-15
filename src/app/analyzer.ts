@@ -14,7 +14,7 @@ import {
   type RankedPlan, type Availability, type TileCounts,
 } from './handMatcher';
 import { getCallOptions, type CallGroupSize } from './gameLogic';
-import { simulateCall } from './aiStrategy';
+import { simulateCall, chooseBlankTrade } from './aiStrategy';
 
 // ════════════════════════════════════════════════════════════════════════
 //   Card structure (one template per concrete pattern)
@@ -354,6 +354,7 @@ function contributionOf(key: string, hand: TileCounts, top: CandidateHand[], exp
 function adviseTile(
   tile: Tile, top: CandidateHand[], phase: PhaseLabel,
   danger: Map<string, OpponentRead>, contribution: (k: string) => number,
+  blankTake: string | null,
 ): TileAdvice {
   if (isJoker(tile)) {
     return {
@@ -366,11 +367,24 @@ function adviseTile(
     };
   }
   if (tile.type === 'special' && tile.specialType === 'blank') {
-    return {
-      tileId: tile.id, tile, action: 'DISCARD',
-      reason: 'A blank never fits a hand. Use the Blank Trade to swap it for a tile from the discards.',
-      rationaleKey: 'blank-trade', contributesTo: [],
-    };
+    if (phase === 'charleston') {
+      return {
+        tileId: tile.id, tile, action: 'KEEP',
+        reason: 'Blanks cannot be passed in the Charleston. Once play starts you can trade it for any discarded tile.',
+        rationaleKey: 'blank-trade', contributesTo: [],
+      };
+    }
+    return blankTake
+      ? {
+        tileId: tile.id, tile, action: 'KEEP',
+        reason: `Trade this blank for the ${blankTake} in the discards — it brings your best hand closer.`,
+        rationaleKey: 'blank-trade', contributesTo: [],
+      }
+      : {
+        tileId: tile.id, tile, action: 'WATCH',
+        reason: 'No discard helps you right now. Hold the blank for a tile you need later, or discard it if you need the room.',
+        rationaleKey: 'blank-trade', contributesTo: [],
+      };
   }
 
   const key = tileKey(tile);
@@ -487,7 +501,10 @@ export function analyze(game: GameState, playerIndex: number, options: AnalyzeOp
     if (!cache.has(k)) cache.set(k, contributionOf(k, counts, topCandidates, exposures, avail));
     return cache.get(k)!;
   };
-  const tileAdvice = hand.map(t => adviseTile(t, topCandidates, phase, danger, contribution));
+  // Blanks: the discard worth taking, if any.
+  const blankChoice = chooseBlankTrade(hand, exposures, game.discardPool, avail);
+  const blankTake = blankChoice ? tileKeyToLabel(tileKey(game.discardPool[blankChoice.poolIndex])) : null;
+  const tileAdvice = hand.map(t => adviseTile(t, topCandidates, phase, danger, contribution, blankTake));
 
   // Quints pivot: with 2+ jokers, point to the best Quints line if it isn't already on top.
   let quintPivot: CandidateHand | null = null;
@@ -516,7 +533,7 @@ function composeTeachingNote(
   if (top.length === 0) return 'No clear hand yet — keep your options open and let go of tiles that fit nothing.';
   if (top[0].missing === 0) return `Your hand is complete: ${top[0].cardLine} (${top[0].points} points). Declare Mahjong!`;
 
-  const noFit = advice.filter(a => a.contributesTo.length === 0 && !isJoker(a.tile)).length;
+  const noFit = advice.filter(a => a.action === 'PASS').length;
   if (phase === 'charleston' && noFit >= 3) {
     return `${noFit} of your tiles fit none of your top hands. Pass those, and don't commit to one hand yet — the Charleston will show you what's coming.`;
   }
@@ -636,7 +653,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   'blank-trade': {
     title: 'Blank Tiles',
-    body: 'Blanks never fit a hand. On your turn you can trade a blank for any tile in the discard pool.',
+    body: 'A blank never fits a hand by itself. On your turn you can trade it for any tile in the discard pool, or simply discard it. A blank is not a Joker and cannot pick up a discarded Joker. Blanks cannot be passed in the Charleston, a discarded blank cannot be called, and you cannot declare Mahjong while holding one.',
   },
   'cluster-rule': {
     title: 'Don\'t Telegraph Your Hand',

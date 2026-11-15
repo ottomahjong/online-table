@@ -441,6 +441,7 @@ export function TileComponent({
   return (
     <div
       onClick={onClick}
+      aria-label={getTileName(tile)}
       className={`
         rounded-sm border shadow-sm relative group/tile
         ${isInteractive ? 'cursor-pointer hover:shadow-md active:shadow-inner transition-all' : ''}

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { TileKey } from './TileKey';
 
 // ─── Theme Colors ──────────────────────────────────────────
 const C = {
@@ -528,6 +529,7 @@ interface NMJLCardProps {
 
 export function NMJLCard({ isOpen, onClose, planHands, onAddPlan, playerBarHeight = 0 }: NMJLCardProps) {
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  const [showTileKey, setShowTileKey] = useState(false);
 
   if (!isOpen) return null;
 
@@ -628,6 +630,35 @@ export function NMJLCard({ isOpen, onClose, planHands, onAddPlan, playerBarHeigh
 
         {/* Categories */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
+          {/* Tile Key */}
+          <div className="mb-2">
+            <button
+              onClick={() => setShowTileKey(v => !v)}
+              aria-expanded={showTileKey}
+              className="w-full flex items-center justify-between px-4 py-2.5 rounded-md transition-colors"
+              style={{
+                background: showTileKey ? `linear-gradient(90deg, ${C.navy}, #2a3d5e)` : C.lightCream,
+                color: showTileKey ? C.cream : C.navy,
+                border: `1px solid ${showTileKey ? C.navy : 'rgba(27,42,74,0.08)'}`,
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-1 h-5 rounded-full" style={{ background: C.terracotta }} />
+                <span style={{ fontFamily: "'Jost', sans-serif", fontWeight: 700, fontSize: '0.85rem', letterSpacing: '0.08em' }}>
+                  Tile Key
+                </span>
+              </div>
+              <span style={{ fontSize: '0.6rem', color: showTileKey ? 'rgba(255,253,247,0.5)' : C.sage, letterSpacing: '0.1em' }}>
+                {showTileKey ? 'HIDE' : 'WHICH TILE IS WHICH'}
+              </span>
+            </button>
+            {showTileKey && (
+              <div className="pt-3 pb-1">
+                <TileKey showBlanks />
+              </div>
+            )}
+          </div>
+
           {SECTIONS.map((section) => {
             const isExpanded = expandedCategory === section.name;
             const accent = SECTION_ACCENTS[section.name] || C.navy;

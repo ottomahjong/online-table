@@ -37,6 +37,10 @@ export function isJoker(tile: Tile): boolean {
   return tile.type === 'special' && tile.specialType === 'joker';
 }
 
+export function isBlank(tile: Tile): boolean {
+  return tile.type === 'special' && tile.specialType === 'blank';
+}
+
 export function suitDragon(suit: Suit): string {
   switch (suit) { case 'bam': return 'green'; case 'crak': return 'red'; case 'dot': return 'soap'; }
 }
