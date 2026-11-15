@@ -458,7 +458,7 @@ export function TileComponent({
           ? `0 0 0 2.5px ${ringColor}, 0 6px 16px rgba(0,0,0,0.25)`
           : undefined,
         marginBottom: selected ? 14 : 0,
-        transition: 'margin-bottom 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+        transition: 'margin-bottom 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out',
       }}
     >
       <div className="size-full overflow-hidden">

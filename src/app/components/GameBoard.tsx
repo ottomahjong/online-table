@@ -8,8 +8,6 @@ import { GameOverModal } from './GameOverModal';
 import { AnalyzePanel } from './AnalyzePanel';
 import { TileKey } from './TileKey';
 import { assessCall } from '../analyzer';
-import { DndProvider } from 'react-dnd';
-import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
 const DISCARD_CALL_WINDOW_SECONDS = 20;
 const OPPONENT_DECISION_SECONDS = 10;
@@ -787,7 +785,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const isCharlestonSelecting = game.phase === 'charleston' && (charlestonSubPhase === 'selecting' || charlestonSubPhase === 'courtesy');
 
   return (
-    <DndProvider backend={HTML5Backend}>
+    <>
     // Pinned to the screen's edges rather than sized with 100dvh: on iPhone the
     // browser bars change the viewport height, and a page left scrolled from the
     // setup screen would otherwise show a gap under the game.
@@ -946,21 +944,6 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                 />
               ) : (
                 <>
-                  {hasSkippableWait && (
-                    <button
-                      onClick={handleSkipWait}
-                      className="px-3 py-1 rounded-full uppercase tracking-[0.14em] transition-all hover:brightness-110"
-                      style={{
-                        background: 'rgba(255,253,247,0.1)',
-                        color: '#FFFDF7',
-                        fontSize: '0.58rem',
-                        fontWeight: 700,
-                        border: '1px solid rgba(212,165,116,0.35)',
-                      }}
-                    >
-                      {pendingAction?.kind === 'call-window' ? 'Resolve Now' : 'Next Turn'}
-                    </button>
-                  )}
 
                   {/* Blank Trade / Joker Exchange mode banner */}
                   {(blankTradeMode || jokerExchangeMode) && (
@@ -1027,6 +1010,28 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                       )}
                     </div>
                   </div>
+
+                  {/* Finish Turn / Next Turn — under the discards, right-aligned, within
+                      thumb reach for one-handed play */}
+                  {hasSkippableWait && (
+                    <div className="w-full max-w-lg flex justify-end">
+                      <button
+                        onClick={handleSkipWait}
+                        className="h-10 px-5 rounded-full uppercase tracking-[0.14em] whitespace-nowrap flex items-center gap-1.5 transition-all hover:brightness-110 active:scale-95"
+                        style={{
+                          background: '#B5704F',
+                          color: '#FFFDF7',
+                          fontSize: '0.68rem',
+                          fontWeight: 700,
+                          boxShadow: '0 4px 12px rgba(181,112,79,0.35)',
+                          animation: 'turn-btn-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)',
+                        }}
+                      >
+                        {pendingAction?.kind === 'call-window' ? 'Finish Turn' : 'Next Turn'}
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  )}
 
                   {/* Calling UI with Countdown */}
                   {isCallingPhase && game.lastDiscarded && (
@@ -1855,7 +1860,7 @@ Blank selected — tap a discard above to take it, or choose Discard Blank
         />
       )}
     </div>
-    </DndProvider>
+    </>
   );
 }
 
