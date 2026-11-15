@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, ChevronDown, ChevronRight, Lightbulb, AlertTriangle, BookOpen } from 'lucide-react';
 import { GameState } from '../types';
+import { PatternDisplayCompact, SUIT_COLORS, type PlanHand } from './NMJLCard';
 import { analyze, GLOSSARY, type AnalysisResult, type TileAction, type CandidateHand, type TileAdvice } from '../analyzer';
 
 const C = {
@@ -31,9 +32,11 @@ interface AnalyzePanelProps {
   onTileHover?: (tileId: string | null) => void;
   /** Height of the player's bar, so the phone sheet stops above the rack. */
   playerBarHeight?: number;
+  planHands?: (PlanHand | null)[];
+  onAddPlan?: (hand: Omit<PlanHand, 'planLabel'>) => void;
 }
 
-export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTileHover, playerBarHeight = 0 }: AnalyzePanelProps) {
+export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTileHover, playerBarHeight = 0, planHands = [], onAddPlan }: AnalyzePanelProps) {
   const [beginnerMode, setBeginnerMode] = useState(true);
   const [openCandidates, setOpenCandidates] = useState(true);
   const [openAdvice, setOpenAdvice] = useState(true);
@@ -165,6 +168,8 @@ export function AnalyzePanel({ open, game, playerIndex, rack = 1, onClose, onTil
                       rank={i + 1}
                       beginnerMode={beginnerMode}
                       onWhy={(k) => setGlossaryKey(k)}
+                      planHands={planHands}
+                      onAddPlan={onAddPlan}
                     />
                   ))}
                 </div>
@@ -278,14 +283,27 @@ function Section({
 // ════════════════════════════════════════════════════════════════════════
 
 function CandidateCard({
-  candidate, rank, beginnerMode, onWhy,
+  candidate, rank, beginnerMode, onWhy, planHands, onAddPlan,
 }: {
   candidate: CandidateHand;
   rank: number;
   beginnerMode: boolean;
   onWhy: (key: string) => void;
+  planHands: (PlanHand | null)[];
+  onAddPlan?: (hand: Omit<PlanHand, 'planLabel'>) => void;
 }) {
   const c = candidate;
+  const planPattern = c.handName;
+  const existing = planHands.find(p => p !== null && p.pattern === planPattern && p.category === c.sectionName);
+  const slotsFull = !planHands.some(p => p === null);
+  const addPlan = () => onAddPlan?.({
+    pattern: planPattern,
+    colorPattern: c.colorPattern,
+    value: c.points,
+    description: c.cardLine !== c.handName ? `On the card: ${c.cardLine}` : '',
+    concealed: c.concealed,
+    category: c.sectionName,
+  });
   return (
     <div
       className="rounded p-2"
@@ -302,14 +320,19 @@ function CandidateCard({
           >
             #{rank}
           </span>
-          <span className="truncate" style={{ color: C.navy, fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.04em' }}>
-            {c.handName}
-          </span>
+          <span className="sr-only">{c.handName}</span>
+          <PatternDisplayCompact pattern={c.handName} colorPattern={c.colorPattern} />
         </div>
         <FeasibilityBar value={c.feasibility} />
       </div>
-      <div className="mb-1" style={{ color: C.warmGray, fontSize: '0.55rem', minHeight: '0.8rem' }} title={`Card line ${c.handId}`}>
-        {c.handName !== c.cardLine ? `On the card: ${c.cardLine}` : ''}
+      <div className="mb-1 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5" style={{ color: C.warmGray, fontSize: '0.55rem', minHeight: '0.8rem' }} title={`Card line ${c.handId}`}>
+        {c.suitColors.map(sc => (
+          <span key={sc.color} className="inline-flex items-center gap-1">
+            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: SUIT_COLORS[sc.color] }} />
+            <span style={{ color: SUIT_COLORS[sc.color], fontWeight: 600 }}>{sc.suit}s</span>
+          </span>
+        ))}
+        {c.handName !== c.cardLine && <span>On the card: {c.cardLine}</span>}
       </div>
       <div className="flex items-center gap-1 flex-wrap mb-1">
         <Tag label={c.sectionName} color={C.green} />
@@ -343,7 +366,22 @@ function CandidateCard({
           </div>
         </div>
       )}
-      <div className="flex justify-end mt-1">
+      <div className="flex items-center justify-between gap-2 mt-1.5">
+        {onAddPlan ? (
+          <button
+            onClick={addPlan}
+            disabled={!!existing || slotsFull}
+            className="h-7 px-2.5 rounded uppercase tracking-wider whitespace-nowrap transition-all hover:brightness-110 disabled:cursor-default"
+            style={{
+              background: existing ? 'rgba(45,106,79,0.12)' : slotsFull ? 'rgba(27,42,74,0.06)' : C.navy,
+              color: existing ? C.green : slotsFull ? C.warmGray : C.cream,
+              fontSize: '0.55rem', fontWeight: 700,
+            }}
+            title={slotsFull && !existing ? 'All three plan slots are full — remove one to add this hand' : undefined}
+          >
+            {existing ? `Plan ${existing.planLabel} ✓` : slotsFull ? 'Plans full' : '+ Plan'}
+          </button>
+        ) : <span />}
         <button
           onClick={() => onWhy(c.concealed ? 'concealed-vs-exposed' : 'tile-fits')}
           className="text-[0.55rem] uppercase tracking-wider hover:underline"

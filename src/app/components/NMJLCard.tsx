@@ -13,7 +13,7 @@ const C = {
 };
 
 // Suit display colors (matching NMJL card convention)
-const SUIT_COLORS = {
+export const SUIT_COLORS = {
   g: '#2D6A4F',   // green suit
   r: '#C0392B',   // red suit
   b: '#2E5090',   // blue suit
