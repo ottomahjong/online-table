@@ -34,6 +34,7 @@ export function DraggableHandTile({
   const ref = useRef<HTMLDivElement>(null);
   const [pressed, setPressed] = useState(false);
   const [dragX, setDragX] = useState<number | null>(null); // null = not lifted
+  const [dragY, setDragY] = useState(0);
 
   const indexRef = useRef(index);
   const pendingIndexRef = useRef<number | null>(null);
@@ -42,7 +43,7 @@ export function DraggableHandTile({
 
   const gesture = useRef<{
     id: number; type: string; startX: number; startY: number;
-    grabOffset: number; lifted: boolean; timer?: number;
+    grabOffset: number; grabOffsetY: number; lifted: boolean; timer?: number;
   } | null>(null);
   const suppressClick = useRef(false);
 
@@ -51,38 +52,41 @@ export function DraggableHandTile({
   const row = () => slot()?.parentElement ?? null;
 
   // Slide into a new slot instead of jumping (sorting, or a neighbour being dragged past).
-  const lastLeft = useRef<number | null>(null);
+  const lastPos = useRef<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
     const s = slot();
     if (!s) return;
-    const left = s.offsetLeft;
-    const prev = lastLeft.current;
-    lastLeft.current = left;
-    if (prev === null || prev === left || dragX !== null || !ref.current) return;
+    const pos = { x: s.offsetLeft, y: s.offsetTop };
+    const prev = lastPos.current;
+    lastPos.current = pos;
+    if (!prev || (prev.x === pos.x && prev.y === pos.y) || dragX !== null || !ref.current) return;
     ref.current.animate(
-      [{ transform: `translateX(${prev - left}px)` }, { transform: 'translateX(0)' }],
+      [{ transform: `translate(${prev.x - pos.x}px, ${prev.y - pos.y}px)` }, { transform: 'translate(0, 0)' }],
       { duration: 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     );
   }, [index]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const followPointer = (clientX: number) => {
+  const followPointer = (clientX: number, clientY: number) => {
     const s = slot(), r = row();
     if (!s || !r) return;
-    const slotLeft = s.getBoundingClientRect().left;
-    setDragX(clientX - gesture.current!.grabOffset - slotLeft);
+    const box = s.getBoundingClientRect();
+    setDragX(clientX - gesture.current!.grabOffset - box.left);
+    setDragY(clientY - gesture.current!.grabOffsetY - box.top);
 
-    // Pass a neighbour's centre → swap with it.
+    // Over another slot (any row) → move there.
     if (pendingIndexRef.current === null) {
       const slots = Array.from(r.children) as HTMLElement[];
       const at = slots.indexOf(s);
-      const next = slots[at + 1], prev = slots[at - 1];
-      const centre = (el: HTMLElement) => { const b = el.getBoundingClientRect(); return b.left + b.width / 2; };
-      if (next && clientX > centre(next)) {
-        pendingIndexRef.current = indexRef.current + 1;
-        moveTile(indexRef.current, indexRef.current + 1);
-      } else if (prev && clientX < centre(prev)) {
-        pendingIndexRef.current = indexRef.current - 1;
-        moveTile(indexRef.current, indexRef.current - 1);
+      const dist = (el: HTMLElement) => {
+        const b = el.getBoundingClientRect();
+        return Math.hypot(clientX - (b.left + b.width / 2), clientY - (b.top + b.height / 2));
+      };
+      let best = at, bestD = dist(s);
+      slots.forEach((el, i) => { const d = dist(el); if (d < bestD - 4) { best = i; bestD = d; } });
+      if (best !== at) {
+        const to = indexRef.current + (best - at);
+        pendingIndexRef.current = to;
+        moveTile(indexRef.current, to);
       }
     }
 
@@ -114,6 +118,7 @@ export function DraggableHandTile({
     gesture.current = null;
     setPressed(false);
     setDragX(null);
+    setDragY(0);
     pendingIndexRef.current = null;
     window.removeEventListener('pointermove', stable.move);
     window.removeEventListener('pointerup', stable.up);
@@ -129,7 +134,7 @@ export function DraggableHandTile({
       if (Math.hypot(dx, dy) < slop) return;
       if (g.type === 'mouse') { lift(); } else { end(); return; } // finger moved first: it's a scroll
     }
-    followPointer(e.clientX);
+    followPointer(e.clientX, e.clientY);
   };
   const onUp = (e: PointerEvent) => { if (gesture.current?.id === e.pointerId) end(); };
 
@@ -156,7 +161,7 @@ export function DraggableHandTile({
     const box = ref.current!.getBoundingClientRect();
     gesture.current = {
       id: e.pointerId, type: e.pointerType, startX: e.clientX, startY: e.clientY,
-      grabOffset: e.clientX - box.left, lifted: false,
+      grabOffset: e.clientX - box.left, grabOffsetY: e.clientY - box.top, lifted: false,
     };
     suppressClick.current = false;
     setPressed(true);
@@ -188,7 +193,7 @@ export function DraggableHandTile({
         WebkitTouchCallout: 'none',
         zIndex: lifted ? 30 : undefined,
         transform: lifted
-          ? `translate(${dragX}px, -12px) scale(1.08)`
+          ? `translate(${dragX}px, ${dragY - 12}px) scale(1.08)`
           : pressed ? 'scale(0.95)' : undefined,
         filter: lifted ? 'drop-shadow(0 10px 14px rgba(27,42,74,0.35))' : undefined,
         transition: lifted ? 'filter 0.12s ease' : 'transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.16s ease',
