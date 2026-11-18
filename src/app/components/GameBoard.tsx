@@ -7,7 +7,8 @@ import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
 import { AnalyzePanel } from './AnalyzePanel';
 import { TileKey } from './TileKey';
-import { assessCall } from '../analyzer';
+import { assessCall, tileKeyToLabel } from '../analyzer';
+import { rankPlans } from '../handMatcher';
 import { HelpCircle, RotateCcw, BookOpen, ArrowRight, ArrowUp, ArrowLeft, Lightbulb, ArrowUpDown, Pause, Play } from 'lucide-react';
 const DISCARD_CALL_WINDOW_SECONDS = 20;
 const OPPONENT_DECISION_SECONDS = 10;
@@ -131,15 +132,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     };
   }, []);
 
-  // Fit the whole hand in one row: shrink rack tiles on narrow screens.
-  const [rackWidth, setRackWidth] = useState(0);
-  useEffect(() => {
-    const el = rackScrollRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => setRackWidth(entries[0].contentRect.width));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  // Width the rack has to work with (the player bar minus the rack's padding).
+  const [playerBarWidth, setPlayerBarWidth] = useState(0);
 
   // Keep the newest discard in view.
   useEffect(() => {
@@ -161,11 +155,13 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     : MOBILE_SIDE_COL;
 
   const humanPlayer = game.players[0];
-  // 14 slots so the size doesn't change between drawing and discarding.
-  const rackSlots = Math.max(14, humanPlayer.hand.length);
-  const rackTileScale = rackWidth > 0
-    ? Math.min(1, (rackWidth - RACK_GAP * (rackSlots - 1)) / (rackSlots * 56))
-    : 1;
+  // Rack layout: one row of full-size tiles when 14 fit (wider screens);
+  // otherwise 2 rows of 7 (phones). Siamese racks show 7 across and scroll.
+  const rackInnerWidth = playerBarWidth > 0 ? playerBarWidth - 16 : 0;
+  const rackSingleRow = rackInnerWidth === 0 || rackInnerWidth >= 14 * 56 + 13 * RACK_GAP;
+  const rackScale7 = rackInnerWidth > 0 ? Math.min(1, (rackInnerWidth - 6 * RACK_GAP) / (7 * 56)) : 1;
+  const rackTileScale = rackSingleRow ? 1 : rackScale7;
+  const rackLift = Math.round(14 * Math.max(rackTileScale, 0.6));
   const tilesRemaining = game.wall.length;
   const tipsEnabled = config.tipsEnabled;
   const callWindowSeconds = DISCARD_CALL_WINDOW_SECONDS;
@@ -184,6 +180,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         setPlayerBarHeight(entry.contentRect.height + 3); // +3 for top border
+        setPlayerBarWidth(entry.contentRect.width);
       }
     });
     observer.observe(playerBarRef.current);
@@ -644,7 +641,27 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   // Declare Mahjong
   const handleDeclareMahjong = useCallback(() => {
     if (isPaused) return;
-    setGame(prev => declareMahjong(prev, 0));
+    setGame(prev => {
+      const next = declareMahjong(prev, 0);
+      if (next.phase === 'gameOver' || prev.currentPlayerIndex !== 0 || prev.turnPhase !== 'discarding') return next;
+      // Not a win: name the closest hand and what it still needs.
+      const me = prev.players[0];
+      const rack = isSiameseMode(prev) ? prev.activeRack : 1;
+      const hand = rack === 2 ? me.hand2 : me.hand;
+      const exps = rack === 2 ? me.exposures2 : me.exposures;
+      const closest = rankPlans(hand, exps)[0];
+      if (!closest) return { ...next, message: 'Not Mahjong: no hand on the card fits these tiles and exposures.' };
+      const p = closest.progress;
+      const needs = [
+        ...[...p.nonJokerShort].map(([k, n]) => `${n}× ${tileKeyToLabel(k)}`),
+        ...p.fills.filter(f => f.jokerable && !f.exposed && f.missing > 0).map(f => `${f.missing}× ${tileKeyToLabel(f.key!)} (or Joker)`),
+      ];
+      const shape = p.variant.groups.map(g => g.text).join(' ');
+      return {
+        ...next,
+        message: `Not Mahjong yet. Closest: ${closest.pattern.label}${shape !== closest.pattern.label ? ` (as ${shape})` : ''} — still needs ${needs.join(', ')}.`,
+      };
+    });
   }, [isPaused]);
 
   const hasPlanHands = planHands.some(p => p !== null);
@@ -1448,14 +1465,13 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                     <div className="px-2 py-1 overflow-x-auto" style={{
                       opacity: rackLocked ? 0.9 : isActive ? 1 : 0.6,
                       filter: rackLocked ? 'none' : isActive ? 'none' : 'grayscale(0.3)',
-                      minHeight: isActive ? 'auto' : 40,
                     }}>
-                    <div className="flex items-end gap-0.5 w-max mx-auto">
+                    <div className="flex items-end w-max mx-auto" style={{ gap: RACK_GAP, minHeight: Math.round(76 * rackScale7) + (isActive ? rackLift : 0) }}>
                       {rackHand.map((tile, index) => {
                         if (isActive && !rackLocked) {
                           return (
+                            <div key={tile.id} data-tile-id={tile.id} className="relative group">
                             <DraggableHandTile
-                              key={tile.id}
                               index={index}
                               tileId={tile.id}
                               moveTile={handleMoveTile}
@@ -1464,6 +1480,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                               <TileComponent
                                 tile={tile}
                                 size="lg"
+                                scale={rackScale7}
                                 selected={game.selectedTileIndex === index}
                                 interactive
                               />
@@ -1482,16 +1499,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                                 </button>
                               )}
                             </DraggableHandTile>
+                            </div>
                           );
                         }
-                        // Inactive rack: smaller tiles, click to move
+                        // Inactive rack: click a tile to move it
                         return (
                           <div key={tile.id}
                             className={rackLocked ? '' : 'cursor-pointer transition-transform hover:scale-105'}
                             onClick={rackLocked ? undefined : (e) => { e.stopPropagation(); handleMoveTileToOtherRack(index, rackNum); }}
                             title={rackLocked ? undefined : `Move to ${rackNum === 1 ? 'Rack 2' : 'Rack 1'}`}
                           >
-                            <TileComponent tile={tile} size="sm" />
+                            <TileComponent tile={tile} size="lg" scale={rackScale7} />
                           </div>
                         );
                       })}
@@ -1503,8 +1521,19 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             </div>
           ) : (
             /* ─── Standard Single Rack ─── */
-            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto" style={{ minHeight: Math.round(76 * rackTileScale + 14 * Math.max(rackTileScale, 0.6)) + 16 }}>
-              <div className="flex items-end w-max mx-auto" style={{ gap: RACK_GAP, minHeight: Math.round(76 * rackTileScale + 14 * Math.max(rackTileScale, 0.6)) }}>
+            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto">
+              <div
+                className={rackSingleRow ? 'flex items-end w-max mx-auto' : 'grid mx-auto items-end'}
+                style={rackSingleRow
+                  ? { gap: RACK_GAP, minHeight: Math.round(76 * rackTileScale) + rackLift }
+                  : {
+                    gridTemplateColumns: `repeat(7, ${56 * rackTileScale}px)`,
+                    gridAutoRows: Math.round(76 * rackTileScale) + rackLift,
+                    columnGap: RACK_GAP, rowGap: 0,
+                    width: 7 * 56 * rackTileScale + 6 * RACK_GAP,
+                    minHeight: 2 * (Math.round(76 * rackTileScale) + rackLift),
+                  }}
+              >
               {humanPlayer.hand.map((tile, index) => {
                 const isCharlestonSelected = isCharlestonSelecting && charlestonSelected.includes(tile.id);
                 const isAnalyzeHovered = analyzeHoverId === tile.id;
