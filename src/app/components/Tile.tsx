@@ -50,6 +50,7 @@ const [Joker1, Joker2, Joker3, Joker4, Joker5, Joker6, Joker7, Joker8, Joker9, J
   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => face(`Joker${n}`));
 const [Flower1, Flower2, Flower3, Flower4, Flower5, Flower6, Flower7, Flower8] =
   [1, 2, 3, 4, 5, 6, 7, 8].map(n => face(`Flower${n}`));
+const flowerStrokeComponents: React.FC[] = [1, 2, 3, 4, 5, 6, 7, 8].map(n => face(`FlowerStroke${n}`));
 
 const NorthWind = face('NorthWind');
 const SouthWind = face('SouthWind');
@@ -73,6 +74,8 @@ interface TileProps {
   scale?: number;
   /** Internal: the scaled wrapper handles the selected lift. */
   liftless?: boolean;
+  /** Flower art: the filled set (default, used in play) or the outlined stroke set. */
+  flowerStyle?: 'fill' | 'stroke';
 }
 
 const sizeMap = {
@@ -217,7 +220,7 @@ const flowerComponents: React.FC[] = [
   Flower6, Flower7, Flower8,
 ];
 
-function renderTileFace(tile: TileType, sizeKey: 'sm' | 'md' | 'lg') {
+function renderTileFace(tile: TileType, sizeKey: 'sm' | 'md' | 'lg', flowerStyle: 'fill' | 'stroke' = 'fill') {
   const isSmall = sizeKey === 'sm';
   const isMed = sizeKey === 'md';
   const numSize = isSmall ? 'text-[11px]' : isMed ? 'text-[15px]' : 'text-[19px]';
@@ -362,8 +365,8 @@ function renderTileFace(tile: TileType, sizeKey: 'sm' | 'md' | 'lg') {
 
       if (tile.specialType === 'flower') {
         // Use Figma-designed Flower components (8 unique designs, cycling for 9+)
-        const flowerIndex = tile.number % flowerComponents.length;
-        const FlowerComponent = flowerComponents[flowerIndex];
+        const set = flowerStyle === 'stroke' ? flowerStrokeComponents : flowerComponents;
+        const FlowerComponent = set[tile.number % set.length];
         return <FlowerComponent />;
       }
 
@@ -407,6 +410,7 @@ export function TileComponent({
   className = '',
   scale = 1,
   liftless = false,
+  flowerStyle,
 }: TileProps) {
   if (scale !== 1) {
     // Lay out at the scaled size; draw the full-size tile scaled down so the face stays crisp.
@@ -420,7 +424,7 @@ export function TileComponent({
       }}>
         <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: w0, height: h0 }}>
           <TileComponent tile={tile} faceDown={faceDown} size={size} selected={selected} selectedColor={selectedColor}
-            onClick={onClick} interactive={interactive} horizontal={horizontal} className={className} liftless />
+            onClick={onClick} interactive={interactive} horizontal={horizontal} className={className} flowerStyle={flowerStyle} liftless />
         </div>
       </div>
     );
@@ -475,7 +479,7 @@ export function TileComponent({
       }}
     >
       <div className="size-full overflow-hidden">
-        {renderTileFace(tile, size)}
+        {renderTileFace(tile, size, flowerStyle)}
       </div>
       {/* Hover tooltip */}
       <div

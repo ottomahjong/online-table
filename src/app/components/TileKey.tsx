@@ -20,6 +20,7 @@ interface KeyRow {
   note: string;
   tiles: Tile[];
   captions?: string[];
+  flowerStyles?: ('fill' | 'stroke')[];
 }
 
 const ROWS: KeyRow[] = [
@@ -31,7 +32,11 @@ const ROWS: KeyRow[] = [
     name: 'Dragons', note: 'D on the card. Each dragon belongs to a suit. The White Dragon (Soap) is also the 0, as in 2025.',
     tiles: dragons, captions: ['Red · Craks', 'Green · Bams', 'White · Dots'],
   },
-  { name: 'Flowers', note: 'F on the card. Every flower counts as the same tile, whatever its picture.', tiles: flowers },
+  {
+    name: 'Flowers', note: 'F on the card. Every flower counts as the same tile, whatever its picture.',
+    tiles: [...flowers, ...flowers.map(t => ({ ...t, id: `${t.id}_stroke` }))],
+    flowerStyles: [...flowers.map(() => 'fill' as const), ...flowers.map(() => 'stroke' as const)],
+  },
   { name: 'Jokers', note: 'Wild in a pung, kong or quint (3, 4 or 5 alike). Never in a pair or a single.', tiles: jokers },
 ];
 
@@ -56,7 +61,7 @@ export function TileKey({ showBlanks = false, dark = false }: { showBlanks?: boo
           <div className="flex flex-wrap gap-px">
             {row.tiles.map((tile, i) => (
               <div key={tile.id} className="flex flex-col items-start" style={{ width: row.captions ? 72 : undefined }}>
-                <TileComponent tile={tile} size="sm" />
+                <TileComponent tile={tile} size="sm" flowerStyle={row.flowerStyles?.[i]} />
                 {row.captions && (
                   <span className="mt-0.5" style={{ color: body, fontSize: '0.55rem', lineHeight: 1.2 }}>
                     {row.captions[i]}
