@@ -23,9 +23,9 @@ interface KeyRow {
 }
 
 const ROWS: KeyRow[] = [
-  { name: 'Bams', note: 'Numbered 1–9, drawn as sticks. The 1 Bam is the bird.', tiles: suited('bam') },
-  { name: 'Craks', note: 'Numbered 1–9, drawn as half-moon shapes.', tiles: suited('crak') },
-  { name: 'Dots', note: 'Numbered 1–9, drawn as four-point stars.', tiles: suited('dot') },
+  { name: 'Bams', note: 'Numbered 1–9, drawn as green sticks.', tiles: suited('bam') },
+  { name: 'Craks', note: 'Numbered 1–9, drawn as copper stars.', tiles: suited('crak') },
+  { name: 'Dots', note: 'Numbered 1–9, drawn as navy circles.', tiles: suited('dot') },
   { name: 'Winds', note: 'North, East, West, South — N E W S on the card.', tiles: winds, captions: ['North', 'East', 'West', 'South'] },
   {
     name: 'Dragons', note: 'D on the card. Each dragon belongs to a suit. The White Dragon (Soap) is also the 0, as in 2025.',

@@ -2,69 +2,59 @@ import React from 'react';
 import { Tile as TileType } from '../types';
 import svgPaths from '../../imports/svg-j2e1svqzjb';
 
-// Figma-designed tile imports
-import BirdBam from '../../imports/BirdBam';
-import Component2Bam from '../../imports/2Bam';
-import Component3Bam from '../../imports/3Bam';
-import Component4Bam from '../../imports/4Bam';
-import Component5Bam from '../../imports/5Bam';
-import Component6Bam from '../../imports/6Bam';
-import Component7Bam from '../../imports/7Bam';
-import Component8Bam from '../../imports/8Bam';
-import Component9Bam from '../../imports/9Bam';
-import GreenDragon from '../../imports/GreenDragon';
+// Otto tile faces: one SVG per face in src/assets/tiles, named to match the components below.
+const tileUrls = import.meta.glob('../../assets/tiles/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 
-// Figma-designed Crak tile imports
-import Component1Crak from '../../imports/1Crak';
-import Component2Crak from '../../imports/2Crak';
-import Component3Crak from '../../imports/3Crak';
-import Component4Crak from '../../imports/4Crak';
-import Component5Crak from '../../imports/5Crak';
-import Component6Crak from '../../imports/6Crak';
-import Component7Crak from '../../imports/7Crak';
-import Component8Crak from '../../imports/8Crak';
-import Component9Crak from '../../imports/9Crak';
-import RedDragon from '../../imports/RedDragon';
+function face(name: string): React.FC {
+  const src = tileUrls[`../../assets/tiles/${name}.svg`];
+  if (!src) throw new Error(`Missing tile face: ${name}.svg`);
+  const Face = () => <img src={src} alt="" draggable={false} className="block size-full object-contain select-none pointer-events-none" />;
+  Face.displayName = name;
+  return Face;
+}
 
-// Figma-designed Dot tile imports
-import Component1Dot from '../../imports/1Dot';
-import Component2Dot from '../../imports/2Dot';
-import Component3Dot from '../../imports/3Dot';
-import Component4Dot from '../../imports/4Dot';
-import Component5Dot from '../../imports/5Dot';
-import Component6Dot from '../../imports/6Dot';
-import Component7Dot from '../../imports/7Dot';
-import Component8Dot from '../../imports/8Dot';
-import Component9Dot from '../../imports/9Dot';
-import SoapDragon from '../../imports/SoapDragon';
+const BirdBam = face('1Bam');
+const Component2Bam = face('2Bam');
+const Component3Bam = face('3Bam');
+const Component4Bam = face('4Bam');
+const Component5Bam = face('5Bam');
+const Component6Bam = face('6Bam');
+const Component7Bam = face('7Bam');
+const Component8Bam = face('8Bam');
+const Component9Bam = face('9Bam');
+const GreenDragon = face('GreenDragon');
 
-// Figma-designed Joker tile imports
-import Joker1 from '../../imports/Joker1';
-import Joker2 from '../../imports/Joker2';
-import Joker3 from '../../imports/Joker3';
-import Joker4 from '../../imports/Joker4';
-import Joker5 from '../../imports/Joker5';
-import Joker6 from '../../imports/Joker6';
-import Joker7 from '../../imports/Joker7';
-import Joker8 from '../../imports/Joker8';
-import Joker9 from '../../imports/Joker9';
-import Joker10 from '../../imports/Joker10';
+const Component1Crak = face('1Crak');
+const Component2Crak = face('2Crak');
+const Component3Crak = face('3Crak');
+const Component4Crak = face('4Crak');
+const Component5Crak = face('5Crak');
+const Component6Crak = face('6Crak');
+const Component7Crak = face('7Crak');
+const Component8Crak = face('8Crak');
+const Component9Crak = face('9Crak');
+const RedDragon = face('RedDragon');
 
-// Figma-designed Flower tile imports
-import Flower1 from '../../imports/Flower1';
-import Flower2 from '../../imports/Flower2';
-import Flower3 from '../../imports/Flower3';
-import Flower4 from '../../imports/Flower4';
-import Flower5 from '../../imports/Flower5';
-import Flower6 from '../../imports/Flower6';
-import Flower7 from '../../imports/Flower7';
-import Flower8 from '../../imports/Flower8';
+const Component1Dot = face('1Dot');
+const Component2Dot = face('2Dot');
+const Component3Dot = face('3Dot');
+const Component4Dot = face('4Dot');
+const Component5Dot = face('5Dot');
+const Component6Dot = face('6Dot');
+const Component7Dot = face('7Dot');
+const Component8Dot = face('8Dot');
+const Component9Dot = face('9Dot');
+const SoapDragon = face('SoapDragon');
 
-// Figma-designed Wind tile imports
-import NorthWind from '../../imports/NorthWind';
-import SouthWind from '../../imports/SouthWind';
-import EastWind from '../../imports/EastWind';
-import WestWind from '../../imports/WestWind';
+const [Joker1, Joker2, Joker3, Joker4, Joker5, Joker6, Joker7, Joker8, Joker9, Joker10] =
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => face(`Joker${n}`));
+const [Flower1, Flower2, Flower3, Flower4, Flower5, Flower6, Flower7, Flower8] =
+  [1, 2, 3, 4, 5, 6, 7, 8].map(n => face(`Flower${n}`));
+
+const NorthWind = face('NorthWind');
+const SouthWind = face('SouthWind');
+const EastWind = face('EastWind');
+const WestWind = face('WestWind');
 
 // Figma-designed Tile Back SVG paths
 import tileBackPaths from '../../imports/svg-xkenso6b24';
@@ -221,7 +211,7 @@ const jokerComponents: React.FC[] = [
   Joker6, Joker7, Joker8, Joker9, Joker10,
 ];
 
-// Array of Figma-designed Flower components (8 unique designs, cycled for 9+)
+// Array of Figma-designed Flower components (6 designs + 2 repeats, cycled for 9+)
 const flowerComponents: React.FC[] = [
   Flower1, Flower2, Flower3, Flower4, Flower5,
   Flower6, Flower7, Flower8,
