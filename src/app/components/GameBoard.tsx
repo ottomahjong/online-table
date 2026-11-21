@@ -1053,7 +1053,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         game.discardPool.map((tile, di) => (
                           <div
                             key={tile.id}
-                            className={blankTradeMode && canTakeWithBlank(tile) ? 'cursor-pointer rounded-sm transition-all hover:ring-2 hover:ring-[#B5704F] hover:scale-110' : ''}
+                            className={blankTradeMode && canTakeWithBlank(tile) ? 'cursor-pointer rounded-[3px] transition-all hover:ring-2 hover:ring-[#B5704F] hover:scale-110' : ''}
                             style={blankTradeMode && !canTakeWithBlank(tile) ? { opacity: 0.35 } : undefined}
                             title={blankTradeMode && !canTakeWithBlank(tile) ? 'A blank cannot take a Joker or another blank' : undefined}
                             onClick={blankTradeMode && canTakeWithBlank(tile) ? () => handleBlankTradeSelect(di) : undefined}
@@ -1249,7 +1249,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                         return (
                           <div
                             key={tile.id}
-                            className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                            className={isClickable ? 'cursor-pointer rounded-[3px] ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
                             onClick={isClickable ? () => handleJokerExchangeSelect(tile.id) : undefined}
                           >
                             <TileComponent tile={tile} size="sm" />
@@ -2351,7 +2351,7 @@ function renderExposureRows(groups: TileType[][], clickableJokerIds?: Set<string
               <div
                 key={tile.id}
                 style={{ transform: `scale(${OPPONENT_TILE_SCALE})`, transformOrigin: 'center center' }}
-                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                className={isClickable ? 'cursor-pointer rounded-[3px] ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
                 onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
               >
                 <TileComponent tile={tile} size="sm" />
@@ -2377,7 +2377,7 @@ function renderExposureColumns(groups: TileType[][], tileRotation: string, click
               <div
                 key={tile.id}
                 style={{ transform: `${tileRotation} scale(${OPPONENT_TILE_SCALE})`, transformOrigin: 'center center' }}
-                className={isClickable ? 'cursor-pointer rounded-sm ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
+                className={isClickable ? 'cursor-pointer rounded-[3px] ring-2 ring-[#B5704F] animate-pulse transition-all hover:scale-110' : ''}
                 onClick={isClickable ? () => onJokerClick?.(tile.id) : undefined}
               >
                 <TileComponent tile={tile} size="sm" />
