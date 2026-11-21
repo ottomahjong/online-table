@@ -78,10 +78,11 @@ interface TileProps {
   flowerStyle?: 'fill' | 'stroke';
 }
 
+// Tiles are 3:4 (width:height) with corners rounded to ~10% of the width.
 const sizeMap = {
-  sm: { w: 32, h: 44 },
-  md: { w: 44, h: 60 },
-  lg: { w: 56, h: 76 },
+  sm: { w: 32, h: 43, r: 3 },
+  md: { w: 44, h: 59, r: 5 },
+  lg: { w: 56, h: 75, r: 6 },
 };
 
 // Starburst SVG for decorative elements
@@ -438,11 +439,12 @@ export function TileComponent({
   if (faceDown) {
     return (
       <div
-        className={`rounded-sm shadow-sm relative overflow-hidden ${className}`}
+        className={`shadow-sm relative overflow-hidden ${className}`}
         style={{
           width: w,
           height: h,
           minWidth: w,
+          borderRadius: dims.r,
         }}
       >
         <div style={{ transform: horizontal ? 'rotate(-90deg) scale(1)' : 'none', transformOrigin: 'center center', width: horizontal ? h : w, height: horizontal ? w : h, position: horizontal ? 'absolute' : 'relative', top: horizontal ? '50%' : undefined, left: horizontal ? '50%' : undefined, marginTop: horizontal ? -(w / 2) : undefined, marginLeft: horizontal ? -(h / 2) : undefined }}>
@@ -460,7 +462,7 @@ export function TileComponent({
       onClick={onClick}
       aria-label={getTileName(tile)}
       className={`
-        rounded-sm border shadow-sm relative group/tile
+        border shadow-sm relative group/tile
         ${isInteractive ? 'cursor-pointer hover:shadow-md active:shadow-inner transition-all' : ''}
         ${selected ? 'shadow-lg' : ''}
         ${className}
@@ -469,6 +471,7 @@ export function TileComponent({
         width: w,
         height: h,
         minWidth: w,
+        borderRadius: dims.r,
         background: '#FFFDF7',
         borderColor: selected ? ringColor : 'rgba(27, 42, 74, 0.15)',
         boxShadow: selected
@@ -478,13 +481,13 @@ export function TileComponent({
         transition: 'margin-bottom 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out',
       }}
     >
-      <div className="size-full overflow-hidden">
+      <div className="size-full overflow-hidden" style={{ borderRadius: Math.max(dims.r - 1, 0) }}>
         {renderTileFace(tile, size, flowerStyle)}
       </div>
       {/* Hover tooltip */}
       <div
-        className="absolute inset-0 flex items-center justify-center rounded bg-[#1B2A4A]/85 text-white opacity-0 pointer-events-none group-hover/tile:opacity-100 transition-opacity"
-        style={{ fontFamily: "'Jost', sans-serif", fontSize: size === 'sm' ? 9 : size === 'md' ? 10 : 11, lineHeight: 1.2 }}
+        className="absolute inset-0 flex items-center justify-center bg-[#1B2A4A]/85 text-white opacity-0 pointer-events-none group-hover/tile:opacity-100 transition-opacity"
+        style={{ borderRadius: Math.max(dims.r - 1, 0), fontFamily: "'Jost', sans-serif", fontSize: size === 'sm' ? 9 : size === 'md' ? 10 : 11, lineHeight: 1.2 }}
       >
         <span className="px-0.5 text-center break-words hyphens-auto leading-tight" style={{ maxWidth: '100%', wordBreak: 'break-word' }}>{getTileName(tile)}</span>
       </div>
@@ -499,11 +502,12 @@ export function TileBack({ size = 'md', horizontal = false, className = '' }: { 
 
   return (
     <div
-      className={`rounded-sm shadow-sm relative overflow-hidden ${className}`}
+      className={`shadow-sm relative overflow-hidden ${className}`}
       style={{
         width: w,
         height: h,
         minWidth: w,
+        borderRadius: dims.r,
       }}
     >
       <div style={{ transform: horizontal ? 'rotate(-90deg) scale(1)' : 'none', transformOrigin: 'center center', width: horizontal ? h : w, height: horizontal ? w : h, position: horizontal ? 'absolute' : 'relative', top: horizontal ? '50%' : undefined, left: horizontal ? '50%' : undefined, marginTop: horizontal ? -(w / 2) : undefined, marginLeft: horizontal ? -(h / 2) : undefined }}>
