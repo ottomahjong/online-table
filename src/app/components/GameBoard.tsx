@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, GameConfig, Tile as TileType } from '../types';
 import { createGame, drawTile, discardTile, sortHand, sortHandRack, aiTurn, getCallOptions, CallGroupSize, CallOption, CharlestonDirection, blankTrade, canTakeWithBlank, findValidJokerExchanges, executeJokerExchange, JokerExchangeOption, getPassTarget, isSiameseMode, isRackLocked, swapTileBetweenRacks, siamesePickDrawRack, declareMahjong, canClaimMahjongOnDiscard, resolveDiscardClaims, executeCharlestonRound, executeCourtesyPass } from '../gameLogic';
-import { TileComponent, TileBack } from './Tile';
+import { TileComponent, TileBack, tileLift } from './Tile';
 import { NMJLCard, PlanHand, PatternDisplayCompact } from './NMJLCard';
 import { DraggableHandTile } from './DraggableHandTile';
 import { GameOverModal } from './GameOverModal';
@@ -161,7 +161,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
   const rackSingleRow = rackInnerWidth === 0 || rackInnerWidth >= 14 * 56 + 13 * RACK_GAP;
   const rackScale7 = rackInnerWidth > 0 ? Math.min(1, (rackInnerWidth - 6 * RACK_GAP) / (7 * 56)) : 1;
   const rackTileScale = rackSingleRow ? 1 : rackScale7;
-  const rackLift = Math.round(14 * Math.max(rackTileScale, 0.6));
+  // Selected tiles rise over the space above them; the rack's top padding leaves room for the first row.
+  const rackLift = tileLift(rackTileScale);
   const tilesRemaining = game.wall.length;
   const tipsEnabled = config.tipsEnabled;
   const callWindowSeconds = DISCARD_CALL_WINDOW_SECONDS;
@@ -1466,7 +1467,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
                       opacity: rackLocked ? 0.9 : isActive ? 1 : 0.6,
                       filter: rackLocked ? 'none' : isActive ? 'none' : 'grayscale(0.3)',
                     }}>
-                    <div className="flex items-end w-max mx-auto" style={{ gap: RACK_GAP, minHeight: Math.round(76 * rackScale7) + (isActive ? rackLift : 0) }}>
+                    <div className="flex items-end w-max mx-auto" style={{ gap: RACK_GAP, minHeight: Math.round(75 * rackScale7), paddingTop: isActive ? tileLift(rackScale7) : 0 }}>
                       {rackHand.map((tile, index) => {
                         if (isActive && !rackLocked) {
                           return (
@@ -1521,17 +1522,17 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
             </div>
           ) : (
             /* ─── Standard Single Rack ─── */
-            <div ref={rackScrollRef} className="px-2 py-2 overflow-x-auto">
+            <div ref={rackScrollRef} className="px-2 overflow-x-auto" style={{ paddingTop: rackLift + 2, paddingBottom: 4 }}>
               <div
                 className={rackSingleRow ? 'flex items-end w-max mx-auto' : 'grid mx-auto items-end'}
                 style={rackSingleRow
-                  ? { gap: RACK_GAP, minHeight: Math.round(76 * rackTileScale) + rackLift }
+                  ? { gap: RACK_GAP, minHeight: Math.round(75 * rackTileScale) }
                   : {
                     gridTemplateColumns: `repeat(7, ${56 * rackTileScale}px)`,
-                    gridAutoRows: Math.round(76 * rackTileScale) + rackLift,
-                    columnGap: RACK_GAP, rowGap: 0,
+                    gridAutoRows: Math.round(75 * rackTileScale),
+                    columnGap: RACK_GAP, rowGap: 4,
                     width: 7 * 56 * rackTileScale + 6 * RACK_GAP,
-                    minHeight: 2 * (Math.round(76 * rackTileScale) + rackLift),
+                    minHeight: 2 * Math.round(75 * rackTileScale) + 4,
                   }}
               >
               {humanPlayer.hand.map((tile, index) => {
@@ -1581,7 +1582,7 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
           )}
 
           {/* Hint — fixed-height row so the bar keeps its position in every state */}
-          <div className="px-2 overflow-hidden whitespace-nowrap [&>div]:truncate" style={{ height: 18 }}>
+          <div className="px-2 overflow-hidden whitespace-nowrap [&>div]:truncate" style={{ height: 14 }}>
           {game.phase === 'charleston' && charlestonSubPhase === 'selecting' && (
             <div className="text-center pb-1" style={{
               color: '#B5704F',

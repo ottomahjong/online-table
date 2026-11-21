@@ -78,6 +78,9 @@ interface TileProps {
   flowerStyle?: 'fill' | 'stroke';
 }
 
+/** How far a selected tile rises, in px, at a given scale. */
+export const tileLift = (scale: number) => Math.round(10 * Math.max(scale, 0.6));
+
 // Tiles are 3:4 (width:height) with corners rounded to ~10% of the width.
 const sizeMap = {
   sm: { w: 32, h: 43, r: 3 },
@@ -420,8 +423,10 @@ export function TileComponent({
     return (
       <div style={{
         width: w0 * scale, height: h0 * scale, minWidth: w0 * scale,
-        marginBottom: selected ? Math.round(14 * Math.max(scale, 0.6)) : 0,
-        transition: 'margin-bottom 0.1s ease-out',
+        // Raise a selected tile without taking up layout space, so rows can sit close together.
+        transform: selected ? `translateY(-${tileLift(scale)}px)` : undefined,
+        position: 'relative', zIndex: selected ? 5 : undefined,
+        transition: 'transform 0.1s ease-out',
       }}>
         <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: w0, height: h0 }}>
           <TileComponent tile={tile} faceDown={faceDown} size={size} selected={selected} selectedColor={selectedColor}
@@ -477,8 +482,9 @@ export function TileComponent({
         boxShadow: selected
           ? `0 0 0 2.5px ${ringColor}, 0 6px 16px rgba(0,0,0,0.25)`
           : undefined,
-        marginBottom: selected && !liftless ? 14 : 0,
-        transition: 'margin-bottom 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out',
+        transform: selected && !liftless ? `translateY(-${tileLift(1)}px)` : undefined,
+        zIndex: selected && !liftless ? 5 : undefined,
+        transition: 'transform 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out',
       }}
     >
       <div className="size-full overflow-hidden" style={{ borderRadius: Math.max(dims.r - 1, 0) }}>
