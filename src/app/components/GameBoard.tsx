@@ -843,6 +843,8 @@ export function GameBoard({ config, onBackToSetup }: GameBoardProps) {
     <div className="fixed inset-x-0 top-0 flex flex-col overflow-hidden select-none" style={{
       background: '#1B2A4A', fontFamily: "'Jost', sans-serif",
       height: viewport ? viewport.height : '100dvh',
+      // Home-screen app mode draws under the status bar; keep the top bar clear of it.
+      paddingTop: 'env(safe-area-inset-top)',
       transform: viewport && viewport.top ? `translateY(${viewport.top}px)` : undefined,
     }}>
       {/* Top Bar */}
