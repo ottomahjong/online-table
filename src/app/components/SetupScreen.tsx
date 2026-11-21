@@ -42,7 +42,12 @@ export function SetupScreen({ onStartGame }: SetupScreenProps) {
   }[playerCount];
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#F5F0E6', fontFamily: "'Jost', sans-serif" }}>
+    <div className="min-h-screen flex flex-col" style={{
+      // In home-screen app mode, a navy band sits behind the status bar so its white text stays readable.
+      background: 'linear-gradient(#1B2A4A, #1B2A4A) top / 100% env(safe-area-inset-top, 0px) no-repeat, #F5F0E6',
+      paddingTop: 'env(safe-area-inset-top)',
+      fontFamily: "'Jost', sans-serif",
+    }}>
       {/* Header */}
       <header className="py-8 text-center" style={{ background: 'linear-gradient(180deg, #FFFDF7 0%, #F5F0E6 100%)' }}>
         <div className="flex items-center justify-center gap-4 mb-3">
